@@ -1,0 +1,142 @@
+
+import logging
+import time
+from typing import Any
+import numpy as np
+from functools import cached_property
+from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
+from lerobot.cameras.utils import make_cameras_from_configs
+
+from lerobot.robots import Robot
+from .config_a10_follower import A10FollowerConfig
+from .a10_client import A10TCPClient
+
+logger = logging.getLogger(__name__)
+
+class A10Follower(Robot):
+    config_class = A10FollowerConfig
+    name = "a10_follower"
+
+    def __init__(self, config: A10FollowerConfig):
+        super().__init__(config)
+        self.config = config
+        
+        if self.config.n_joints == 7:
+             self.joint_names = [
+                "joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6", "gripper"
+            ]
+        elif self.config.n_joints == 6:
+             self.joint_names = [
+                "joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6"
+            ]
+        else:
+             self.joint_names = [f"joint_{i}" for i in range(self.config.n_joints)]
+
+        self.client = A10TCPClient(
+            host=config.host,
+            port=config.port,
+            joint_names=self.joint_names,
+            timeout_ms=config.timeout_ms
+        )
+        
+        # Initialize cameras from config (standard LeRobot way)
+        self.cameras = make_cameras_from_configs(config.cameras)
+
+    @property
+    def _motors_ft(self) -> dict[str, type]:
+        return {f"{motor}.pos": float for motor in self.joint_names}
+
+    @property
+    def _cameras_ft(self) -> dict[str, tuple]:
+        return {
+            name: (cam.height, cam.width, 3) for name, cam in self.cameras.items()
+        }
+
+    @cached_property
+    def observation_features(self) -> dict[str, type | tuple]:
+        return {**self._motors_ft, **self._cameras_ft}
+
+    @cached_property
+    def action_features(self) -> dict[str, type]:
+        return self._motors_ft
+
+    @property
+    def is_connected(self) -> bool:
+        return self.client.is_connected and all(cam.is_connected for cam in self.cameras.values())
+
+    def connect(self, calibrate: bool = True) -> None:
+        if self.is_connected:
+            logger.info(f"{self} already connected.")
+            return
+        
+        self.client.connect()
+        for cam in self.cameras.values():
+            cam.connect()
+        # logger.info(f"{self} connected.")
+
+    def disconnect(self) -> None:
+        if not self.is_connected:
+            return
+        self.client.disconnect()
+        for cam in self.cameras.values():
+            cam.disconnect()
+
+    # ---------- 标定 / 配置（先空着） ----------
+
+    @property
+    def is_calibrated(self) -> bool:
+        return True
+
+    def setup_motors(self) -> None:
+        pass
+    
+    def calibrate(self) -> None:
+        pass
+
+    def configure(self) -> None:
+        pass
+
+    # ---------- 观测 / 动作 ----------
+
+    def get_observation(self) -> dict[str, Any]:
+        if not self.is_connected:
+            raise ConnectionError(f"{self} is not connected.")
+        
+        start = time.perf_counter()
+        state = self.client.get_observation()  # {"q": ...}
+        
+        q = state["q"]
+        obs_dict = {}
+        for i, name in enumerate(self.joint_names):
+            if i < len(q):
+                obs_dict[f"{name}.pos"] = float(q[i])
+
+        dt_ms = (time.perf_counter() - start) * 1e3
+        logger.debug(f"{self} read state: {dt_ms:.1f}ms")
+
+        # 2. Get Images from Local Cameras
+        for cam_key, cam in self.cameras.items():
+            start = time.perf_counter()
+            obs_dict[cam_key] = cam.async_read()
+            dt_ms = (time.perf_counter() - start) * 1e3
+            logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
+
+        return obs_dict
+
+    def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+            
+        # Extract joint positions in order
+        q_target = []
+        for name in self.joint_names:
+            key = f"{name}.pos"
+            if key in action:
+                q_target.append(action[key])
+            else:
+                q_target.append(0.0) 
+        
+        q_target_arr = np.array(q_target, dtype=np.float32)
+        self.client.send_action(q_target_arr)
+        
+        return action

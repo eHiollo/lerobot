@@ -98,6 +98,8 @@ from lerobot.robots import (  # noqa: F401
     make_robot_from_config,
     so100_follower,
     so101_follower,
+    a10_follower,
+    x7_follower,
 )
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
@@ -108,6 +110,8 @@ from lerobot.teleoperators import (  # noqa: F401
     make_teleoperator_from_config,
     so100_leader,
     so101_leader,
+    a10_leader,
+    x7_leader,
 )
 from lerobot.teleoperators.keyboard.teleop_keyboard import KeyboardTeleop
 from lerobot.utils.constants import ACTION, OBS_STR
@@ -269,7 +273,7 @@ def record_loop(
                 for t in teleop
                 if isinstance(
                     t,
-                    (so100_leader.SO100Leader | so101_leader.SO101Leader | koch_leader.KochLeader),
+                    (so100_leader.SO100Leader | so101_leader.SO101Leader | a10_leader.A10Leader | x7_leader.X7Leader | koch_leader.KochLeader),
                 )
             ),
             None,
@@ -517,4 +521,22 @@ def main():
 
 
 if __name__ == "__main__":
+    import sys
+    # Hardcoded defaults for A10 robot
+    # These are inserted before command line arguments, so you can override them.
+    # e.g. python src/lerobot/scripts/lerobot_record.py --dataset.repo_id=my_new_id
+    defaults = [
+        "--robot.type=a10_follower",
+        "--robot.host=192.168.1.7",
+        "--robot.port=8080",
+        "--teleop.type=a10_leader",
+        "--teleop.host=192.168.1.7",
+        "--teleop.port=8080",
+        "--dataset.repo_id=ircl/test_a10_default1",
+        "--dataset.single_task=test a10",
+        "--display_data=False",
+        "--dataset.fps=60",
+    ]
+    sys.argv = [sys.argv[0]] + defaults + sys.argv[1:]
+
     main()
