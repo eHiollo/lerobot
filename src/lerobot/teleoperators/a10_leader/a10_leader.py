@@ -40,7 +40,7 @@ class A10Leader(Teleoperator):
         self.config = config
         
         self.motor_names = [
-            "joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6"
+            "joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6","gripper"
         ]
         
         self.client = A10TCPClient(

@@ -45,7 +45,7 @@ class A10TCPClient:
             if hasattr(self, 'initialized') and self.initialized:
                 # 如果新的 timeout 更长，更新它
                 if timeout_ms > self.timeout_ms:
-                    print(f"[A10TCPClient] Updating timeout from {self.timeout_ms} to {timeout_ms} ms")
+                    #print(f"[A10TCPClient] Updating timeout from {self.timeout_ms} to {timeout_ms} ms")
                     self.timeout_ms = timeout_ms
                     if self.sock:
                         self.sock.settimeout(self.timeout_ms / 1000.0)
@@ -166,7 +166,7 @@ class A10TCPClient:
                     raise ConnectionError("Received empty line from server")
                 
                 # Debug print: Show exactly what we received
-                print(f"[A10TCPClient] Received (Follower): {header_line}")
+                ##print(f"[A10TCPClient] Received (Follower): {header_line}")
 
                 # If the line looks like JSON (starts with {), try to parse it
                 if header_line.strip().startswith("{"):
@@ -203,7 +203,7 @@ class A10TCPClient:
                     raise ConnectionError("Received empty line from server")
                 
                 # Debug print: Show exactly what we received
-                print(f"[A10TCPClient] Received (Leader): {header_line}")
+                #print(f"[A10TCPClient] Received (Leader): {header_line}")
 
                 # If the line looks like JSON (starts with {), try to parse it
                 if header_line.strip().startswith("{"):
@@ -233,7 +233,7 @@ class A10TCPClient:
 
             payload = json.dumps({"q": q_target.tolist()})
             cmd = f"SET_JOINTS {payload}"
-            print(f"[A10TCPClient] Sending: {cmd}")
+            #print(f"[A10TCPClient] Sending: {cmd}")
             self._send_line(cmd)
             
             self._last_q = q_target
@@ -322,7 +322,7 @@ class A10TCPClient:
         # 通过底层 SET_JOINTS 协议发送
         payload = json.dumps({"q": q_target.tolist()})
         cmd = f"SET_JOINTS {payload}"
-        print(f"[A10TCPClient] Sending: {cmd}")
+        #print(f"[A10TCPClient] Sending: {cmd}")
         self._send_line(cmd)
 
         # 你可以在服务端回一个 OK，这里可选读一行响应：

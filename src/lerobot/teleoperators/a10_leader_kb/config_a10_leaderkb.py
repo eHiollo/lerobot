@@ -7,9 +7,9 @@ from dataclasses import dataclass
 from ..config import TeleoperatorConfig
 
 
-@TeleoperatorConfig.register_subclass("a10_leader")
+@TeleoperatorConfig.register_subclass("a10_leader_kb")
 @dataclass
-class A10LeaderConfig(TeleoperatorConfig):
+class A10LeaderKbConfig(TeleoperatorConfig):
     # Host and port to connect to the leader arm via TCP
     host: str
     port: int

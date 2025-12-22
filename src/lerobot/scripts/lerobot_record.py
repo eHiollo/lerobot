@@ -111,6 +111,7 @@ from lerobot.teleoperators import (  # noqa: F401
     so100_leader,
     so101_leader,
     a10_leader,
+    a10_leader_kb,
     x7_leader,
 )
 from lerobot.teleoperators.keyboard.teleop_keyboard import KeyboardTeleop
@@ -325,6 +326,7 @@ def record_loop(
 
         elif policy is None and isinstance(teleop, Teleoperator):
             act = teleop.get_action()
+            #print("get_action 输出", act)
 
             # Applies a pipeline to the raw teleop action, default is IdentityProcessor
             act_processed_teleop = teleop_action_processor((act, obs))
@@ -524,19 +526,50 @@ if __name__ == "__main__":
     import sys
     # Hardcoded defaults for A10 robot
     # These are inserted before command line arguments, so you can override them.
-    # e.g. python src/lerobot/scripts/lerobot_record.py --dataset.repo_id=my_new_id
+    # e.g. python src/lerobot/scripts/lerobot_record.py --dataset.repo_id=allen/my_neaw_id12.16
     defaults = [
         "--robot.type=a10_follower",
         "--robot.host=192.168.1.7",
         "--robot.port=8080",
-        "--teleop.type=a10_leader",
+        #"--teleop.type=a10_leader",
+        "--teleop.type=a10_leader_kb",
         "--teleop.host=192.168.1.7",
         "--teleop.port=8080",
-        "--dataset.repo_id=ircl/test_a10_default1",
-        "--dataset.single_task=test a10",
+        "--dataset.repo_id=allen/test_a10_12_162",
+        "--dataset.single_task=test_a10",
         "--display_data=False",
-        "--dataset.fps=60",
+        "--dataset.fps=30",
+        "--dataset.push_to_hub=False",                mm m mm m
+        # "--robot.cameras={\"top\": {\"type\": \"opencv\", \"index_or_path\": 0, \"width\": 640, \"height\": 480, \"fps\": 30}, "
+        #  "\"right\": {\"type\": \"opencv\", \"index_or_path\": 2, \"width\": 640,\"rotation\": \"ROTATE_180\", \"height\": 480, \"fps\": 30}}"
     ]
     sys.argv = [sys.argv[0]] + defaults + sys.argv[1:]
 
     main()
+
+    
+
+
+# Example recording with bimanual so100:
+# ```shell
+# lerobot-record \
+#   --robot.type=bi_so100_follower \
+#   --robot.left_arm_port=/dev/tty.usbmodem5A460851411 \
+#   --robot.right_arm_port=/dev/tty.usbmodem5A460812391 \
+#   --robot.id=bimanual_follower \
+#   --robot.cameras='{
+#     left: {"type": "opencv", "index_or_path": 0, "width": 640, "height": 480, "fps": 30},
+#     top: {"type": "opencv", "index_or_path": 1, "width": 640, "height": 480, "fps": 30},
+#     right: {"type": "opencv", "index_or_path": 2, "width": 640, "height": 480, "fps": 30}
+#   }' \
+#   --teleop.type=bi_so100_leader \
+#   --teleop.left_arm_port=/dev/tty.usbmodem5A460828611 \
+#   --teleop.right_arm_port=/dev/tty.usbmodem5A460826981 \
+#   --teleop.id=bimanual_leader \
+#   --display_data=true \
+#   --dataset.repo_id=${HF_USER}/bimanual-so100-handover-cube \
+#   --dataset.num_episodes=25 \
+#   --dataset.single_task="Grab and handover the red cube to the other arm"
+# ```
+# """
+
