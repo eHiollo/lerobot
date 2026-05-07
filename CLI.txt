@@ -1,0 +1,14 @@
+  #数据录制
+    #下一轮
+    # kill -USR1 <pid>
+    # 重新录制
+    # kill -USR2 <pid>
+    # 停止录制
+    # kill -TERM <pid>
+
+    # 继续录制指令
+python src/lerobot/scripts/lerobot_record.py   --dataset.root=/home/allen/projects/lerobot/dataset/test_a10_20260402_164126   --dataset.repo_id=allen/test_a10_20260402_164126   --resume=true   --dataset.push_to_hub=false
+
+
+  #检查摄像头
+  lerobot-find-cameras opencv

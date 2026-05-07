@@ -59,7 +59,10 @@ lerobot-record \
 """
 
 import logging
+import os
+import signal
 import time
+from datetime import datetime
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from pprint import pformat
@@ -375,6 +378,39 @@ def record_loop(
         timestamp = time.perf_counter() - start_episode_t
 
 
+def configure_signal_controls(events: dict) -> dict[int, Any]:
+    """Register signal-based controls for VM/headless usage."""
+    previous_handlers: dict[int, Any] = {}
+
+    def _on_signal(signum, _frame):
+        if signum == signal.SIGUSR1:
+            logging.info("Received SIGUSR1: exit current loop early.")
+            events["exit_early"] = True
+        elif signum == signal.SIGUSR2:
+            logging.info("Received SIGUSR2: re-record current episode.")
+            events["rerecord_episode"] = True
+            events["exit_early"] = True
+        elif signum == signal.SIGTERM:
+            logging.info("Received SIGTERM: stop recording.")
+            events["stop_recording"] = True
+            events["exit_early"] = True
+
+    for sig in (signal.SIGUSR1, signal.SIGUSR2, signal.SIGTERM):
+        previous_handlers[sig] = signal.getsignal(sig)
+        signal.signal(sig, _on_signal)
+
+    logging.info(
+        "Signal controls enabled (pid=%s): SIGUSR1=next episode, SIGUSR2=re-record, SIGTERM=stop",
+        os.getpid(),
+    )
+    return previous_handlers
+
+
+def restore_signal_controls(previous_handlers: dict[int, Any]) -> None:
+    for sig, handler in previous_handlers.items():
+        signal.signal(sig, handler)
+
+
 @parser.wrap()
 def record(cfg: RecordConfig) -> LeRobotDataset:
     init_logging()
@@ -450,6 +486,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         teleop.connect()
 
     listener, events = init_keyboard_listener()
+    previous_signal_handlers = configure_signal_controls(events)
 
     with VideoEncodingManager(dataset):
         recorded_episodes = 0
@@ -509,6 +546,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
 
     if not is_headless() and listener is not None:
         listener.stop()
+    restore_signal_controls(previous_signal_handlers)
 
     if cfg.dataset.push_to_hub:
         dataset.push_to_hub(tags=cfg.dataset.tags, private=cfg.dataset.private)
@@ -524,35 +562,39 @@ def main():
 
 if __name__ == "__main__":
     import sys
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    default_repo_id = f"allen/test_a10_{timestamp}"
+
     # Hardcoded defaults for A10 robot
     # These are inserted before command line arguments, so you can override them.
     # e.g. python src/lerobot/scripts/lerobot_record.py --dataset.repo_id=allen/my_neaw_id12.16
     defaults = [
         "--robot.type=a10_follower",
-        "--robot.host=192.168.1.7",
+        "--robot.host=192.168.1.6",
         "--robot.port=8080",
         #"--teleop.type=a10_leader",
         "--teleop.type=a10_leader_kb",
-        "--teleop.host=192.168.1.7",
+        "--teleop.host=192.168.1.6",
         "--teleop.port=8080",
-        "--dataset.repo_id=allen/test_a10_12_162",
+        f"--dataset.repo_id={default_repo_id}",
         "--dataset.single_task=test_a10",
-        "--display_data=False",
-        "--dataset.fps=30",
-        "--dataset.push_to_hub=False",                mm m mm m
-        # "--robot.cameras={\"top\": {\"type\": \"opencv\", \"index_or_path\": 0, \"width\": 640, \"height\": 480, \"fps\": 30}, "
-        #  "\"right\": {\"type\": \"opencv\", \"index_or_path\": 2, \"width\": 640,\"rotation\": \"ROTATE_180\", \"height\": 480, \"fps\": 30}}"
-    ]
+        "--display_data=False",    
+        "--dataset.fps=15",
+        "--dataset.push_to_hub=False",
+        "--robot.cameras={\"right\": {\"type\": \"opencv\", \"index_or_path\": 0, \"width\": 640, \"rotation\": \"ROTATE_180\", \"height\": 480, \"fps\": 30}}"
+     ]
     sys.argv = [sys.argv[0]] + defaults + sys.argv[1:]
 
     main()
 
-    
+
+
 
 
 # Example recording with bimanual so100:
 # ```shell
-# lerobot-record \
+# lerobot-record \ 
 #   --robot.type=bi_so100_follower \
 #   --robot.left_arm_port=/dev/tty.usbmodem5A460851411 \
 #   --robot.right_arm_port=/dev/tty.usbmodem5A460812391 \

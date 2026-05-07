@@ -20,7 +20,7 @@ Helper to find the camera devices available in your system.
 Example:
 
 ```shell
-lerobot-find-cameras
+lerobot-find-cameras opencv
 ```
 """
 
