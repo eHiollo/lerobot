@@ -63,7 +63,16 @@ lerobot-train \
   --wandb.enable=true \
   --policy.repo_id=${HF_USER}/act_policy
 ```
-
+lerobot-train \
+  --dataset.repo_id=dat_5_9 \
+  --dataset.root=/home/allen/Allen/lerobot/dataset/data_5_9 \
+  --policy.type=act \
+  --output_dir=/home/allen/Allen/lerobot/outputs/act_5_11 \
+  --job_name=act_local \
+  --policy.device=cuda \
+  --policy.push_to_hub=false \
+  --dataset.video_backend=pyav
+  
 ### Training Tips
 
 1. **Start with defaults**: ACT's default hyperparameters work well for most tasks

@@ -12,3 +12,43 @@ python src/lerobot/scripts/lerobot_record.py   --dataset.root=/home/allen/projec
 
   #检查摄像头
   lerobot-find-cameras opencv
+
+  #训练模型
+  lerobot-train \
+  --dataset.repo_id=${HF_USER}/<dataset> \
+  --output_dir=./outputs/[RUN_NAME] \
+  --job_name=[RUN_NAME] \
+  --policy.repo_id=${HF_USER}/<desired_policy_repo_id> \
+  --policy.path=lerobot/[BASE_CHECKPOINT] \
+  --policy.dtype=bfloat16 \
+  --policy.device=cuda \
+  --steps=100000 \
+  --batch_size=4
+
+  # act训练 
+  lerobot-train \
+  --dataset.repo_id=dat_5_9 \
+  --dataset.root=/home/allen/Allen/lerobot/dataset/data_5_9 \
+  --policy.type=act \
+  --output_dir=/home/allen/Allen/lerobot/outputs/act_5_11 \
+  --job_name=act_local \
+  --policy.device=cuda \
+  --policy.push_to_hub=false \
+  --dataset.video_backend=pyav \
+  --resume=true \
+  --config_path=/home/allen/Allen/lerobot/outputs/act_5_12/checkpoints/004000/pretrained_model/train_config.json
+
+  cd /home/allen/Allen/lerobot
+  python examples/tutorial/act/act_training_example.py \
+    --resume outputs/act_5_12/checkpoints/000600/pretrained_model
+
+# act推理
+python -m lerobot.scripts.lerobot_ws_act_policy_server \
+  --policy.path=/home/allen/Allen/lerobot/outputs/act_5_12/checkpoints/012600/pretrained_model \
+  --host=0.0.0.0 \
+  --port=8000 \
+  --dataset.repo_id=date_5_9 \
+  --dataset.root=/home/allen/Allen/lerobot/dataset/data_5_9 \
+  --debug_inference \
+  --debug_every=1 \
+  --debug_image_dir=debug_act_obs

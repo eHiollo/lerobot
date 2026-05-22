@@ -126,7 +126,10 @@ def prepare_observation_for_inference(
         to (C, H, W) and normalized to a [0, 1] range.
     """
     for name in observation:
-        observation[name] = torch.from_numpy(observation[name])
+        arr = observation[name]
+        if isinstance(arr, np.ndarray) and not arr.flags.writeable:
+            arr = arr.copy()
+        observation[name] = torch.from_numpy(arr)
         if "image" in name:
             observation[name] = observation[name].type(torch.float32) / 255
             observation[name] = observation[name].permute(2, 0, 1).contiguous()

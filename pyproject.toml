@@ -99,6 +99,9 @@ placo-dep = ["placo>=0.9.6,<0.10.0"]
 transformers-dep = ["transformers>=4.53.0,<5.0.0"]
 grpcio-dep = ["grpcio==1.73.1", "protobuf==6.31.0"] # TODO: Bumb dependency (compatible with wandb)
 
+# OpenPI-compatible WebSocket bridge for ACT inference (Isaac / openpi_client)
+ws-act = ["websockets>=13.0,<16.0", "msgpack>=1.0.0,<2.0.0"]
+
 # Motors
 feetech = ["feetech-servo-sdk>=1.0.0,<2.0.0"]
 dynamixel = ["dynamixel-sdk>=3.7.31,<3.9.0"]
@@ -188,6 +191,7 @@ lerobot-info="lerobot.scripts.lerobot_info:main"
 lerobot-find-joint-limits="lerobot.scripts.lerobot_find_joint_limits:main"
 lerobot-imgtransform-viz="lerobot.scripts.lerobot_imgtransform_viz:main"
 lerobot-edit-dataset="lerobot.scripts.lerobot_edit_dataset:main"
+lerobot-ws-act-policy-server="lerobot.scripts.lerobot_ws_act_policy_server:main"
 
 # ---------------- Tool Configurations ----------------
 [tool.setuptools.packages.find]
