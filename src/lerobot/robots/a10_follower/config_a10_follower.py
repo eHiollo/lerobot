@@ -13,7 +13,9 @@ class A10FollowerConfig(RobotConfig):
     host: str = "192.168.1.105"
     port: int = 8080
     n_joints: int = 7
-    timeout_ms: int = 5000  
+    timeout_ms: int = 5000
+    # When True, send_action accepts ee.delta_* and forwards SET_EE_DELTA to controller
+    use_ee_delta: bool = True
 
     # 默认相机配置，可以被命令行覆盖
     cameras: Dict[str, CameraConfig] = field(

@@ -178,3 +178,6 @@ outputs/
 *.urdf
 *.xml
 *.part
+
+examples/xlevr_to_a10/recordings
+CLI.txt

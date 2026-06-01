@@ -91,8 +91,9 @@ from lerobot.teleoperators import (  # noqa: F401
     so101_leader,
     a10_leader, 
     x7_leader,
+    xlevr,
 )
-from lerobot.utils.import_utils import register_third_party_devices
+from lerobot.teleoperators.xlevr.factory import make_xlevr_a10_processors
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import init_logging, move_cursor_up
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
@@ -196,6 +197,10 @@ def teleoperate(cfg: TeleoperateConfig):
     teleop = make_teleoperator_from_config(cfg.teleop)
     robot = make_robot_from_config(cfg.robot)
     teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
+    if cfg.teleop.type == "xlevr":
+        teleop_action_processor, robot_action_processor, robot_observation_processor = make_xlevr_a10_processors(
+            cfg.teleop  # type: ignore[arg-type]
+        )
 
     teleop.connect()
     robot.connect()

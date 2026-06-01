@@ -91,6 +91,7 @@ from lerobot.processor import (
     RobotProcessorPipeline,
     make_default_processors,
 )
+from lerobot.teleoperators.xlevr.factory import make_xlevr_a10_processors
 from lerobot.processor.rename_processor import rename_stats
 from lerobot.robots import (  # noqa: F401
     Robot,
@@ -115,6 +116,7 @@ from lerobot.teleoperators import (  # noqa: F401
     so101_leader,
     a10_leader,
     a10_leader_kb,
+    xlevr,
     x7_leader,
 )
 from lerobot.teleoperators.keyboard.teleop_keyboard import KeyboardTeleop
@@ -303,6 +305,12 @@ def record_loop(
             events["exit_early"] = False
             break
 
+        if isinstance(teleop, Teleoperator) and hasattr(teleop, "get_vr_events"):
+            vr_events = teleop.get_vr_events()
+            for key, value in vr_events.items():
+                if value:
+                    events[key] = True
+
         # Get robot observation
         obs = robot.get_observation()
 
@@ -422,13 +430,23 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
     teleop = make_teleoperator_from_config(cfg.teleop) if cfg.teleop is not None else None
 
     teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
+    if cfg.teleop is not None and cfg.teleop.type == "xlevr":
+        teleop_action_processor, robot_action_processor, robot_observation_processor = make_xlevr_a10_processors(
+            cfg.teleop  # type: ignore[arg-type]
+        )
+
+    action_initial_features = (
+        teleop.action_features
+        if teleop is not None and cfg.teleop is not None and cfg.teleop.type == "xlevr"
+        else robot.action_features
+    )
 
     dataset_features = combine_feature_dicts(
         aggregate_pipeline_dataset_features(
             pipeline=teleop_action_processor,
             initial_features=create_initial_features(
-                action=robot.action_features
-            ),  # TODO(steven, pepijn): in future this should be come from teleop or policy
+                action=action_initial_features
+            ),
             use_videos=cfg.dataset.video,
         ),
         aggregate_pipeline_dataset_features(
@@ -573,10 +591,11 @@ if __name__ == "__main__":
         "--robot.type=a10_follower",
         "--robot.host=192.168.1.6",
         "--robot.port=8080",
+        "--robot.use_ee_delta=true",
         #"--teleop.type=a10_leader",
-        "--teleop.type=a10_leader_kb",
-        "--teleop.host=192.168.1.6",
-        "--teleop.port=8080",
+        "--teleop.type=xlevr",
+        "--teleop.xlevr_path=/home/allen/Allen/XLeRobot/XLeVR",
+        "--teleop.arm=right",
         f"--dataset.repo_id={default_repo_id}",
         "--dataset.single_task=test_a10",
         "--display_data=False",    

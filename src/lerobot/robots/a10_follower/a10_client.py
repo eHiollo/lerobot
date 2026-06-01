@@ -78,8 +78,22 @@ class A10TCPClient:
                 return
 
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(self.timeout_ms / 1000.0)
-            s.connect((self.host, self.port))
+            timeout_s = self.timeout_ms / 1000.0
+            s.settimeout(timeout_s)
+            try:
+                s.connect((self.host, self.port))
+            except socket.timeout as exc:
+                s.close()
+                raise ConnectionError(
+                    f"连接 A10 控制器超时 ({timeout_s:.1f}s): {self.host}:{self.port}。"
+                    f"请确认机器人 TCP 服务已启动且 IP/端口正确。"
+                ) from exc
+            except OSError as exc:
+                s.close()
+                raise ConnectionError(
+                    f"无法连接 A10 控制器 {self.host}:{self.port}: {exc}。"
+                    f"请确认机器人 TCP 服务已启动且网络可达。"
+                ) from exc
             self.sock = s
 
             if handshake:
@@ -233,10 +247,27 @@ class A10TCPClient:
 
             payload = json.dumps({"q": q_target.tolist()})
             cmd = f"SET_JOINTS {payload}"
-            #print(f"[A10TCPClient] Sending: {cmd}")
             self._send_line(cmd)
-            
+
             self._last_q = q_target
+
+    def send_ee_delta(self, actions: list[float]) -> None:
+        """
+        Send 7D end-effector delta action at control rate (always).
+
+        actions layout: [dx, dy, dz, droll, dpitch, dyaw, gripper]
+        When teleop is disabled, arm deltas (first 6) are zero; gripper is still sent.
+        """
+        if len(actions) != 7:
+            raise ValueError(f"SET_EE_DELTA expects 7 actions, got {len(actions)}")
+
+        with self.tx_lock:
+            if not self.is_connected:
+                raise ConnectionError("A10TCPBus is not connected")
+
+            payload = json.dumps({"actions": [float(v) for v in actions]})
+            cmd = f"SET_EE_DELTA {payload}"
+            self._send_line(cmd)
 
 
     # ---------- Feetech 风格 API：read / sync_read ----------

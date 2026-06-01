@@ -52,3 +52,19 @@ python -m lerobot.scripts.lerobot_ws_act_policy_server \
   --debug_inference \
   --debug_every=1 \
   --debug_image_dir=debug_act_obs
+
+#vr
+ 真机(无相机)
+ python examples/xlevr_to_a10/teleoperate.py --robot-host 192.168.1.12 --robot-port 8080
+ # 机械臂 TCP 重启后自动重连(默认开启); 断线即退出: --no-reconnect
+ 只测试vr(打印输出)
+ python examples/xlevr_to_a10/teleoperate.py --vr-only
+ 录制手柄轨迹(vr-only)
+ python examples/xlevr_to_a10/teleoperate.py --vr-only --record
+ python examples/xlevr_to_a10/plot_vr_trajectory.py examples/xlevr_to_a10/recordings/vr_trace_20260526_233445.jsonl
+ 打印tcp中的action
+ python examples/xlevr_to_a10/test_action_print.py
+
+python examples/xlevr_to_a10/plot_vr_trajectory.py \
+  examples/xlevr_to_a10/recordings/vr_trace_20260526_233445.json \
+  --save trajectory.png

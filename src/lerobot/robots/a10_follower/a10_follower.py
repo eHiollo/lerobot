@@ -58,6 +58,17 @@ class A10Follower(Robot):
 
     @cached_property
     def action_features(self) -> dict[str, type]:
+        if self.config.use_ee_delta:
+            return {
+                "ee.enabled": bool,
+                "ee.delta_x": float,
+                "ee.delta_y": float,
+                "ee.delta_z": float,
+                "ee.delta_roll": float,
+                "ee.delta_pitch": float,
+                "ee.delta_yaw": float,
+                "gripper.pos": float,
+            }
         return self._motors_ft
 
     @property
@@ -126,17 +137,34 @@ class A10Follower(Robot):
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
-            
-        # Extract joint positions in order
+
+        if self.config.use_ee_delta and "ee.delta_x" in action:
+            enabled = bool(action.get("ee.enabled", False))
+            if enabled:
+                arm = [
+                    float(action.get("ee.delta_x", 0.0)),
+                    float(action.get("ee.delta_y", 0.0)),
+                    float(action.get("ee.delta_z", 0.0)),
+                    float(action.get("ee.delta_roll", 0.0)),
+                    float(action.get("ee.delta_pitch", 0.0)),
+                    float(action.get("ee.delta_yaw", 0.0)),
+                ]
+            else:
+                arm = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+            actions = arm + [float(action.get("gripper.pos", 0.0))]
+            self.client.send_ee_delta(actions)
+            return action
+
         q_target = []
         for name in self.joint_names:
             key = f"{name}.pos"
             if key in action:
                 q_target.append(action[key])
             else:
-                q_target.append(0.0) 
-        
+                q_target.append(0.0)
+
         q_target_arr = np.array(q_target, dtype=np.float32)
         self.client.send_action(q_target_arr)
-        
+
         return action
