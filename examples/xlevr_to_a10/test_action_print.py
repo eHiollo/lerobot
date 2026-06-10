@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Print XLeVR -> ee.delta action at TCP control rate (default 15Hz).
+Print XLeVR -> ee.delta action at TCP control rate (default 30Hz).
 
 VR browser sends ~72-90Hz (A-Frame tick), but this script only samples/sends
 at --control-fps, matching lerobot-record / TCP rate.
 
 Usage:
     python examples/xlevr_to_a10/test_action_print.py
-    python examples/xlevr_to_a10/test_action_print.py --control-fps 15
+    python examples/xlevr_to_a10/test_action_print.py --control-fps 30
 """
 
 from __future__ import annotations
@@ -30,25 +30,25 @@ TCP_KEYS = (
     "ee.delta_x",
     "ee.delta_y",
     "ee.delta_z",
-    "ee.delta_roll",
-    "ee.delta_pitch",
-    "ee.delta_yaw",
+    "ee.delta_rx",
+    "ee.delta_ry",
+    "ee.delta_rz",
     "gripper.pos",
     "vr.button_squeeze",
     "vr.thumbstick_x",
 )
 
 
-# Robot frame: +X forward, +Y left, +Z up
+# Robot frame: +X up, +Y right, +Z forward
 DIM_LABELS_POS = {
-    "dx": ("向前", "向后"),
-    "dy": ("向左", "向右"),
-    "dz": ("向上", "向下"),
+    "dx": ("向上", "向下"),
+    "dy": ("向右", "向左"),
+    "dz": ("向前", "向后"),
 }
 DIM_LABELS_ROT = {
-    "droll": ("绕X滚转+", "绕X滚转-"),
-    "dpitch": ("绕Y俯仰+", "绕Y俯仰-"),
-    "dyaw": ("绕Z偏航+", "绕Z偏航-"),
+    "rx": ("绕X逆时针", "绕X顺时针"),
+    "ry": ("绕Y逆时针", "绕Y顺时针"),
+    "rz": ("绕Z逆时针", "绕Z顺时针"),
 }
 
 
@@ -111,11 +111,11 @@ def describe_dominant_motion(
         ),
         _describe_axis_group(
             rot_vals,
-            ("droll", "dpitch", "dyaw"),
+            ("rx", "ry", "rz"),
             DIM_LABELS_ROT,
             angle_threshold,
-            "deg",
-            "姿态",
+            "rad",
+            "姿态(rotvec)",
         ),
     ]
 
@@ -135,9 +135,9 @@ def action_to_tcp_payload(action: dict[str, Any]) -> dict[str, Any]:
             float(action.get("ee.delta_x", 0.0)),
             float(action.get("ee.delta_y", 0.0)),
             float(action.get("ee.delta_z", 0.0)),
-            float(action.get("ee.delta_roll", 0.0)),
-            float(action.get("ee.delta_pitch", 0.0)),
-            float(action.get("ee.delta_yaw", 0.0)),
+            float(action.get("ee.delta_rx", 0.0)),
+            float(action.get("ee.delta_ry", 0.0)),
+            float(action.get("ee.delta_rz", 0.0)),
         ]
     else:
         arm = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
@@ -168,7 +168,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Print XLeVR TCP action at control rate")
     parser.add_argument("--xlevr-path", default=XLEVR_PATH)
     parser.add_argument("--arm", default="right", choices=["left", "right"])
-    parser.add_argument("--control-fps", type=int, default=15, help="与 TCP/record 一致的控制频率")
+    parser.add_argument("--control-fps", type=int, default=30, help="与 TCP/record 一致的控制频率")
     parser.add_argument("--status-interval", type=float, default=3.0)
     parser.add_argument("--print-idle", action="store_true", help="无运动时 also 打印零 delta")
     parser.add_argument("--pos-threshold", type=float, default=0.0005, help="平移方向判定阈值 (m)")

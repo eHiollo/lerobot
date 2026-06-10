@@ -19,6 +19,35 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
+    """检测 TCP 端口是否已被占用。"""
+    check_host = "127.0.0.1" if host in ("0.0.0.0", "") else host
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((check_host, port))
+            return False
+        except OSError:
+            return True
+
+
+def format_port_busy_help(https_port: int, ws_port: int | None = None) -> str:
+    ws_line = f"\n  WebSocket 端口 {ws_port} 也可能被占用。" if ws_port is not None else ""
+    return (
+        f"XLeVR 端口 {https_port} 已被占用（Address already in use）。\n"
+        f"通常是因为之前的 teleoperate 仍在运行。{ws_line}\n"
+        f"处理：\n"
+        f"  1) 在旧终端 Ctrl+C 结束进程，或\n"
+        f"  2) 查占用: ss -tlnp | grep -E '{https_port}|{ws_port or ''}'\n"
+        f"  3) 结束进程: kill <PID>\n"
+        f"然后只保留一个 XLeVR 实例再启动（VR 浏览器可继续用原 https 页面）。"
+    )
+
+
+class ReuseHTTPServer(http.server.HTTPServer):
+    allow_reuse_address = True
+
+
 def setup_xlevr_environment(xlevr_path: str) -> None:
     xlevr_path = str(Path(xlevr_path).resolve())
     if xlevr_path not in sys.path:
@@ -114,7 +143,7 @@ class SimpleHTTPSServer:
         self.web_root_path = web_root_path
 
     async def start(self):
-        self.httpd = http.server.HTTPServer((self.config.host_ip, self.config.https_port), SimpleAPIHandler)
+        self.httpd = ReuseHTTPServer((self.config.host_ip, self.config.https_port), SimpleAPIHandler)
         self.httpd.web_root_path = self.web_root_path
 
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -154,6 +183,7 @@ class VRMonitorBridge:
         self.goals_received = 0
         self.last_goal_time: float | None = None
         self.servers_started = False
+        self.startup_error: BaseException | None = None
 
     def initialize(self) -> bool:
         if not Path(self.xlevr_path).exists():
@@ -196,8 +226,14 @@ class VRMonitorBridge:
         original_cwd = os.getcwd()
         os.chdir(self.xlevr_path)
         try:
-            await self.https_server.start()
-            await self.vr_server.start()
+            try:
+                await self.https_server.start()
+                await self.vr_server.start()
+            except OSError as exc:
+                self.startup_error = exc
+                logger.error("XLeVR server bind failed: %s", exc)
+                return
+
             self.is_running = True
             self.servers_started = True
 
@@ -242,17 +278,12 @@ class VRMonitorBridge:
             return current
         if current.target_position is None and previous.target_position is not None:
             current.target_position = previous.target_position
-        if current.wrist_roll_deg is None and previous.wrist_roll_deg is not None:
-            current.wrist_roll_deg = previous.wrist_roll_deg
-        if current.wrist_flex_deg is None and previous.wrist_flex_deg is not None:
-            current.wrist_flex_deg = previous.wrist_flex_deg
-        if current.wrist_yaw_deg is None and previous.wrist_yaw_deg is not None:
-            current.wrist_yaw_deg = previous.wrist_yaw_deg
-
         prev_meta = getattr(previous, "metadata", None) or {}
         cur_meta = getattr(current, "metadata", None) or {}
         merged_meta = dict(prev_meta)
         merged_meta.update(cur_meta)
+        if merged_meta.get("orientation_quat") is None and prev_meta.get("orientation_quat") is not None:
+            merged_meta["orientation_quat"] = prev_meta["orientation_quat"]
 
         # One-shot flags must not stick across later position updates.
         if not cur_meta.get("reset_target_to_current"):

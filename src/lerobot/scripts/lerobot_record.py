@@ -599,7 +599,7 @@ if __name__ == "__main__":
         f"--dataset.repo_id={default_repo_id}",
         "--dataset.single_task=test_a10",
         "--display_data=False",    
-        "--dataset.fps=15",
+        "--dataset.fps=30",
         "--dataset.push_to_hub=False",
         "--robot.cameras={\"right\": {\"type\": \"opencv\", \"index_or_path\": 0, \"width\": 640, \"rotation\": \"ROTATE_180\", \"height\": 480, \"fps\": 30}}"
      ]

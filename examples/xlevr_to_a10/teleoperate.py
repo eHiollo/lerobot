@@ -1,29 +1,20 @@
 #!/usr/bin/env python3
 """
-Teleoperate A10 with XLeVR — sends ee.delta_* to robot-side IK.
+Teleoperate A10 with XLeVR — body-frame quaternion deltas -> SET_EE_DELTA (7D rotvec).
+
+Robot frame: +X up, +Y right, +Z forward.
 
 Usage:
     cd /home/allen/Allen/lerobot
 
-    # 完整遥操作（默认不启相机，只连 TCP 发 actions；机器人程序重启后会自动重连）
     python examples/xlevr_to_a10/teleoperate.py --robot-host 192.168.1.12 --robot-port 8080
-
-    # 禁用自动重连（断线即退出，与旧行为一致）
     python examples/xlevr_to_a10/teleoperate.py --robot-host 192.168.1.12 --no-reconnect
-
-    # 仅测 VR 数据流（不连机器人、不发 TCP）
     python examples/xlevr_to_a10/teleoperate.py --vr-only
-
-    # vr-only + 录制非零 delta 帧，再画三维轨迹
-    python examples/xlevr_to_a10/teleoperate.py --vr-only --record
-    python examples/xlevr_to_a10/plot_vr_trajectory.py recordings/vr_trace_xxx.jsonl
 """
 
 import argparse
 import logging
 import time
-from datetime import datetime
-from pathlib import Path
 
 from lerobot.robots.a10_follower.a10_follower import A10Follower
 from lerobot.robots.a10_follower.config_a10_follower import A10FollowerConfig
@@ -33,9 +24,6 @@ from lerobot.teleoperators.xlevr.teleop_xlevr import XLeVRTeleop
 from lerobot.utils.errors import DeviceNotConnectedError
 from lerobot.utils.robot_utils import precise_sleep
 
-from vr_trajectory_recorder import VRTrajectoryRecorder
-
-# 机器人 TCP 断线 / 对端关程序时常见异常
 ROBOT_LINK_ERRORS = (
     ConnectionError,
     DeviceNotConnectedError,
@@ -44,7 +32,7 @@ ROBOT_LINK_ERRORS = (
     TimeoutError,
 )
 
-FPS = 15
+FPS = 30
 XLEVR_PATH = "/home/allen/Allen/XLeRobot/XLeVR"
 DEFAULT_JOINTS = ("joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6", "gripper")
 
@@ -66,32 +54,7 @@ def parse_args():
         action="store_true",
         help="启用 config 里的 OpenCV 相机（默认不启，仅 TCP 发 actions）",
     )
-    parser.add_argument("--print-every", type=int, default=15, help="vr-only 模式下每 N 帧打印一次 delta")
-    parser.add_argument(
-        "--max-delta-pos",
-        type=float,
-        default=None,
-        metavar="M",
-        help="单帧位置 delta 上限 (m)，默认不限",
-    )
-    parser.add_argument(
-        "--max-delta-angle",
-        type=float,
-        default=None,
-        metavar="DEG",
-        help="单帧姿态 delta 上限 (deg)，默认不限",
-    )
-    parser.add_argument(
-        "--record",
-        action="store_true",
-        help="仅 --vr-only：任意 ee.delta_x/y/z/roll/pitch/yaw 非零时写入 JSONL",
-    )
-    parser.add_argument(
-        "--record-file",
-        type=Path,
-        default=None,
-        help="录制文件路径，默认 examples/xlevr_to_a10/recordings/vr_trace_<时间>.jsonl",
-    )
+    parser.add_argument("--print-every", type=int, default=30, help="vr-only 模式下每 N 帧打印一次 delta")
     parser.add_argument(
         "--reconnect",
         action="store_true",
@@ -101,7 +64,7 @@ def parse_args():
     parser.add_argument(
         "--no-reconnect",
         action="store_true",
-        help="断线后不重连，进程退出（与旧行为一致）",
+        help="断线后不重连，进程退出",
     )
     parser.add_argument(
         "--reconnect-interval",
@@ -115,8 +78,6 @@ def parse_args():
         args.reconnect = False
     elif args.reconnect is None:
         args.reconnect = not args.vr_only
-    if args.record and not args.vr_only:
-        parser.error("--record 仅支持与 --vr-only 一起使用")
     return args
 
 
@@ -146,7 +107,6 @@ def wait_for_robot(
     *,
     first_attempt: bool = False,
 ) -> bool:
-    """阻塞直到连上或用户 Ctrl+C。first_attempt 时打印「正在连接…」。"""
     attempt = 0
     while True:
         if first_attempt and attempt == 0:
@@ -171,8 +131,6 @@ def main():
         xlevr_path=args.xlevr_path,
         arm="right",
         control_fps=args.fps,
-        max_delta_pos_m=args.max_delta_pos,
-        max_delta_angle_deg=args.max_delta_angle,
     )
     teleop = XLeVRTeleop(teleop_config)
     teleop_action_processor, robot_action_processor, _ = make_xlevr_a10_processors(teleop_config)
@@ -190,21 +148,11 @@ def main():
 
         robot = A10Follower(A10FollowerConfig(**robot_cfg_kwargs))
 
-    # 先连 VR，避免机器人不可达时一直卡在 connect
     print("正在启动 XLeVR...")
     teleop.connect()
 
-    recorder: VRTrajectoryRecorder | None = None
     if args.vr_only:
         print("VR-only 模式：只打印 ee.delta，不连接机器人、不发 TCP。")
-        if args.record:
-            record_dir = Path(__file__).resolve().parent / "recordings"
-            record_dir.mkdir(parents=True, exist_ok=True)
-            record_path = args.record_file or (
-                record_dir / f"vr_trace_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
-            )
-            recorder = VRTrajectoryRecorder(record_path, fps=args.fps)
-            print(f"录制已开启：任意 ee.delta 非零时写入 {record_path}")
     else:
         cam_note = "无相机" if not args.with_cameras else "含相机"
         print(
@@ -226,7 +174,7 @@ def main():
                 teleop.disconnect()
                 raise SystemExit("已取消（未连上机器人）。")
         else:
-            print(f"正在连接机器人 ...")
+            print("正在连接机器人 ...")
             try:
                 robot.connect()
             except ConnectionError as exc:
@@ -238,7 +186,7 @@ def main():
             print(f"已连接机器人，@ {args.fps}Hz 发送 SET_EE_DELTA actions。")
 
     print("XLeVR 遥操作运行中，Ctrl+C 停止。")
-    print("右手 squeeze=按住才控制机械臂 | 右手摇杆 x=夹爪 | 左手摇杆=录制事件(record.py)")
+    print("右手 squeeze=粗调 | 前扳机=精调(无需 squeeze) | 摇杆 x=夹爪 | 左手摇杆=record.py 事件")
     frame = 0
     robot_link_ok = robot is not None and robot.is_connected
     next_reconnect_at = 0.0
@@ -285,22 +233,21 @@ def main():
                     if not args.reconnect:
                         raise
                     print("机器人已断开，VR 仍运行；等待对端程序重启后自动重连 ...")
-            elif robot is None:
-                if recorder is not None:
-                    recorder.maybe_record(frame, robot_action, raw_action)
-                if frame % args.print_every == 0:
-                    keys = (
-                        "ee.delta_x",
-                        "ee.delta_y",
-                        "ee.delta_z",
-                        "ee.delta_roll",
-                        "ee.delta_pitch",
-                        "gripper.pos",
-                        "vr.thumbstick_x",
-                        "vr.button_squeeze",
-                    )
-                    summary = ", ".join(f"{k}={robot_action.get(k)}" for k in keys if k in robot_action)
-                    print(f"[frame {frame}] {summary}")
+            elif robot is None and frame % args.print_every == 0:
+                keys = (
+                    "ee.delta_x",
+                    "ee.delta_y",
+                    "ee.delta_z",
+                    "ee.delta_rx",
+                    "ee.delta_ry",
+                    "ee.delta_rz",
+                    "gripper.pos",
+                    "vr.thumbstick_x",
+                    "vr.button_squeeze",
+                    "vr.trigger",
+                )
+                summary = ", ".join(f"{k}={robot_action.get(k)}" for k in keys if k in robot_action)
+                print(f"[frame {frame}] {summary}")
 
             frame += 1
             dt = time.perf_counter() - start
@@ -308,9 +255,6 @@ def main():
     except KeyboardInterrupt:
         print("\nStopping...")
     finally:
-        if recorder is not None:
-            count = recorder.close()
-            print(f"录制结束，共 {count} 帧写入 {recorder.output_path}")
         teleop.disconnect()
         if robot is not None and robot.is_connected:
             robot.disconnect()

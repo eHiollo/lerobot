@@ -13,8 +13,14 @@ from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnected
 
 from ..teleoperator import Teleoperator
 from .config_xlevr import XLeVRTeleopConfig
+from .quaternion_utils import parse_quat_xyzw
 from .vr_events import VREventHandler
-from .vr_monitor_bridge import VRMonitorBridge, get_local_ip
+from .vr_monitor_bridge import (
+    VRMonitorBridge,
+    format_port_busy_help,
+    get_local_ip,
+    is_port_in_use,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +49,7 @@ class XLeVRTeleop(Teleoperator):
         return {
             "xlevr.enabled": bool,
             "xlevr.target_position": np.ndarray,
-            "xlevr.wrist_roll_deg": float,
-            "xlevr.wrist_flex_deg": float,
-            "xlevr.wrist_yaw_deg": float,
-            "xlevr.gripper_closed": bool,
+            "xlevr.orientation_quat": np.ndarray,
             "xlevr.grip_active": bool,
             "xlevr.trigger": float,
             "xlevr.thumbstick": dict,
@@ -91,14 +94,34 @@ class XLeVRTeleop(Teleoperator):
         if not init_ok:
             raise ConnectionError("XLeVR monitor initialization timed out")
 
+        https_port = self._vr_monitor.config.https_port
+        ws_port = self._vr_monitor.config.websocket_port
+        if is_port_in_use(https_port, self._vr_monitor.config.host_ip):
+            raise ConnectionError(format_port_busy_help(https_port, ws_port))
+
+        self._vr_monitor.startup_error = None
         self._vr_thread = threading.Thread(
             target=lambda: asyncio.run(self._vr_monitor.start_monitoring()),
             daemon=True,
         )
         self._vr_thread.start()
-        time.sleep(0.5)
 
-        if not self._vr_thread.is_alive():
+        deadline = time.time() + self.config.connection_timeout
+        while time.time() < deadline:
+            if self._vr_monitor.startup_error is not None:
+                err = self._vr_monitor.startup_error
+                if isinstance(err, OSError) and err.errno == 98:
+                    raise ConnectionError(format_port_busy_help(https_port, ws_port)) from err
+                raise ConnectionError(f"XLeVR 服务启动失败: {err}") from err
+            if self._vr_monitor.servers_started:
+                break
+            if not self._vr_thread.is_alive():
+                break
+            time.sleep(0.1)
+
+        if not self._vr_monitor.servers_started:
+            if is_port_in_use(https_port, self._vr_monitor.config.host_ip):
+                raise ConnectionError(format_port_busy_help(https_port, ws_port))
             raise ConnectionError("XLeVR monitoring thread failed to start")
 
         self._connected = True
@@ -152,6 +175,8 @@ class XLeVRTeleop(Teleoperator):
             buttons["squeeze"] = True
         squeeze_active = bool(buttons.get("squeeze", False))
 
+        orientation_quat = parse_quat_xyzw(metadata.get("orientation_quat"))
+
         return {
             "xlevr.enabled": squeeze_active and goal.target_position is not None,
             "xlevr.target_position": (
@@ -159,10 +184,7 @@ class XLeVRTeleop(Teleoperator):
                 if goal.target_position is not None
                 else None
             ),
-            "xlevr.wrist_roll_deg": goal.wrist_roll_deg,
-            "xlevr.wrist_flex_deg": goal.wrist_flex_deg,
-            "xlevr.wrist_yaw_deg": goal.wrist_yaw_deg,
-            "xlevr.gripper_closed": goal.gripper_closed,
+            "xlevr.orientation_quat": orientation_quat,
             "xlevr.grip_active": grip_active,
             "xlevr.trigger": trigger,
             "xlevr.thumbstick": dict(metadata.get("thumbstick", {}) or {}),
@@ -185,10 +207,7 @@ class XLeVRTeleop(Teleoperator):
         return {
             "xlevr.enabled": enabled,
             "xlevr.target_position": None,
-            "xlevr.wrist_roll_deg": None,
-            "xlevr.wrist_flex_deg": None,
-            "xlevr.wrist_yaw_deg": None,
-            "xlevr.gripper_closed": None,
+            "xlevr.orientation_quat": None,
             "xlevr.trigger": 0.0,
             "xlevr.thumbstick": {},
             "xlevr.buttons": {},

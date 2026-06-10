@@ -25,6 +25,8 @@ def make_xlevr_a10_processors(
             XLeVRDeltaEEMapper(
                 pos_scale=teleop_config.pos_scale,
                 angle_scale=teleop_config.angle_scale,
+                fine_trigger_threshold=teleop_config.fine_trigger_threshold,
+                fine_scale_factor=teleop_config.fine_scale_factor,
                 vr_to_robot_scale=teleop_config.vr_to_robot_scale,
                 pos_deadzone_m=teleop_config.pos_deadzone_m,
                 angle_deadzone_deg=teleop_config.angle_deadzone_deg,
@@ -34,9 +36,6 @@ def make_xlevr_a10_processors(
                 gripper_thumbstick_axis=teleop_config.gripper_thumbstick_axis,
                 gripper_thumbstick_deadzone=teleop_config.gripper_thumbstick_deadzone,
                 axis_remap=teleop_config.axis_remap,
-                delta_roll_sign=teleop_config.delta_roll_sign,
-                delta_pitch_sign=teleop_config.delta_pitch_sign,
-                delta_yaw_sign=teleop_config.delta_yaw_sign,
             ),
         ],
         to_transition=robot_action_observation_to_transition,

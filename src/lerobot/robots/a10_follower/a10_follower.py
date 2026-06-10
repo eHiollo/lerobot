@@ -64,9 +64,9 @@ class A10Follower(Robot):
                 "ee.delta_x": float,
                 "ee.delta_y": float,
                 "ee.delta_z": float,
-                "ee.delta_roll": float,
-                "ee.delta_pitch": float,
-                "ee.delta_yaw": float,
+                "ee.delta_rx": float,
+                "ee.delta_ry": float,
+                "ee.delta_rz": float,
                 "gripper.pos": float,
             }
         return self._motors_ft
@@ -145,9 +145,9 @@ class A10Follower(Robot):
                     float(action.get("ee.delta_x", 0.0)),
                     float(action.get("ee.delta_y", 0.0)),
                     float(action.get("ee.delta_z", 0.0)),
-                    float(action.get("ee.delta_roll", 0.0)),
-                    float(action.get("ee.delta_pitch", 0.0)),
-                    float(action.get("ee.delta_yaw", 0.0)),
+                    float(action.get("ee.delta_rx", 0.0)),
+                    float(action.get("ee.delta_ry", 0.0)),
+                    float(action.get("ee.delta_rz", 0.0)),
                 ]
             else:
                 arm = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]

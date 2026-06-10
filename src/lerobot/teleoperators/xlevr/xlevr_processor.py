@@ -1,27 +1,35 @@
 #!/usr/bin/env python
 
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
 
 from lerobot.configs.types import FeatureType, PipelineFeatureType, PolicyFeature
 from lerobot.processor import ProcessorStepRegistry, RobotAction, RobotActionProcessorStep
+from lerobot.teleoperators.xlevr.quaternion_utils import (
+    delta_position_body,
+    parse_quat_xyzw,
+    quat_delta_rotvec_body_rad,
+    remap_position,
+    remap_rotvec,
+)
 
 
 @ProcessorStepRegistry.register("xlevr_to_ee_delta")
 @dataclass
 class XLeVRDeltaEEMapper(RobotActionProcessorStep):
     """
-    Convert consecutive XLeVR absolute poses into end-effector delta commands.
+    Convert consecutive XLeVR poses into body-frame EE deltas, then remap to robot base.
 
-    Squeeze button gates arm motion; thumbstick x is passed through as gripper.pos.
-    No inverse kinematics here — the robot controller is expected to consume
-    `ee.delta_*` and run IK locally.
+    Orientation: quaternion frame delta (body) -> rotvec (rad) -> SET_EE_DELTA[3:6].
     """
 
-    pos_scale: float = 1.0
-    angle_scale: float = 1.0
+    pos_scale: float = 0.9
+    angle_scale: float = 1.3
     vr_to_robot_scale: float = 1.0
+    fine_trigger_threshold: float = 0.5
+    fine_scale_factor: float = 0.5
     pos_deadzone_m: float = 0.0005
     angle_deadzone_deg: float = 0.05
     max_delta_pos_m: float | None = None
@@ -30,29 +38,31 @@ class XLeVRDeltaEEMapper(RobotActionProcessorStep):
     gripper_thumbstick_axis: str = "x"
     gripper_thumbstick_deadzone: float = 0.05
 
-    # VR (+X right, +Y up, +Z back) -> robot (+X fwd, +Y left, +Z up)
     axis_remap: tuple[tuple[float, float, float], ...] = field(
         default_factory=lambda: (
-            (0.0, 0.0, -1.0),
-            (-1.0, 0.0, 0.0),
             (0.0, 1.0, 0.0),
+            (1.0, 0.0, 0.0),
+            (0.0, 0.0, -1.0),
         )
     )
-    delta_roll_sign: float = -1.0
-    delta_pitch_sign: float = 1.0
-    delta_yaw_sign: float = -1.0
 
     _prev_position: np.ndarray | None = field(default=None, init=False, repr=False)
-    _prev_wrist_roll: float | None = field(default=None, init=False, repr=False)
-    _prev_wrist_flex: float | None = field(default=None, init=False, repr=False)
-    _prev_wrist_yaw: float | None = field(default=None, init=False, repr=False)
+    _prev_orientation_quat: np.ndarray | None = field(default=None, init=False, repr=False)
     _control_was_active: bool = field(default=False, init=False, repr=False)
+
+    @property
+    def _angle_deadzone_rad(self) -> float:
+        return math.radians(self.angle_deadzone_deg)
+
+    @property
+    def _max_delta_angle_rad(self) -> float | None:
+        if self.max_delta_angle_deg is None:
+            return None
+        return math.radians(self.max_delta_angle_deg)
 
     def _reset_reference(self) -> None:
         self._prev_position = None
-        self._prev_wrist_roll = None
-        self._prev_wrist_flex = None
-        self._prev_wrist_yaw = None
+        self._prev_orientation_quat = None
 
     def _thumbstick_to_gripper(self, thumbstick: dict) -> float:
         raw = float(thumbstick.get(self.gripper_thumbstick_axis, 0.0))
@@ -60,13 +70,42 @@ class XLeVRDeltaEEMapper(RobotActionProcessorStep):
             return 0.0
         return raw
 
+    def _fine_trigger_active(self, trigger: float) -> bool:
+        return trigger >= self.fine_trigger_threshold
+
+    def _motion_scales(self, trigger: float) -> tuple[float, float]:
+        if self._fine_trigger_active(trigger):
+            return (
+                self.pos_scale * self.fine_scale_factor,
+                self.angle_scale * self.fine_scale_factor,
+            )
+        return self.pos_scale, self.angle_scale
+
+    def _orientation_delta_rotvec(
+        self,
+        orientation_quat,
+        *,
+        angle_scale: float,
+    ) -> tuple[float, float, float]:
+        quat = parse_quat_xyzw(orientation_quat)
+        if quat is None:
+            return 0.0, 0.0, 0.0
+        if self._prev_orientation_quat is None:
+            self._prev_orientation_quat = quat.copy()
+            return 0.0, 0.0, 0.0
+
+        rotvec_vr = quat_delta_rotvec_body_rad(self._prev_orientation_quat, quat) * angle_scale
+        self._prev_orientation_quat = quat.copy()
+        rotvec_robot = remap_rotvec(rotvec_vr, self.axis_remap)
+        rx, ry, rz = float(rotvec_robot[0]), float(rotvec_robot[1]), float(rotvec_robot[2])
+        rx, ry, rz = self._clip_delta_rotvec(rx, ry, rz)
+        rx, ry, rz = self._apply_deadzone_rotvec(rx, ry, rz)
+        return rx, ry, rz
+
     def action(self, action: RobotAction) -> RobotAction:
         action.pop("xlevr.enabled", False)
         target_position = action.pop("xlevr.target_position", None)
-        wrist_roll_deg = action.pop("xlevr.wrist_roll_deg", None)
-        wrist_flex_deg = action.pop("xlevr.wrist_flex_deg", None)
-        wrist_yaw_deg = action.pop("xlevr.wrist_yaw_deg", None)
-        action.pop("xlevr.gripper_closed", None)
+        orientation_quat = action.pop("xlevr.orientation_quat", None)
         grip_active = bool(action.pop("xlevr.grip_active", False))
         trigger = float(action.pop("xlevr.trigger", 0.0))
         thumbstick = action.pop("xlevr.thumbstick", {}) or {}
@@ -77,7 +116,12 @@ class XLeVRDeltaEEMapper(RobotActionProcessorStep):
             buttons = dict(buttons)
             buttons["squeeze"] = True
         squeeze_active = bool(buttons.get("squeeze", False))
-        control_active = squeeze_active if self.require_squeeze_to_move else True
+        fine_active = self._fine_trigger_active(trigger)
+        if self.require_squeeze_to_move:
+            control_active = squeeze_active or fine_active
+        else:
+            control_active = True
+        pos_scale_eff, angle_scale_eff = self._motion_scales(trigger)
 
         if not control_active:
             if self._control_was_active:
@@ -90,58 +134,37 @@ class XLeVRDeltaEEMapper(RobotActionProcessorStep):
         self._control_was_active = True
 
         delta_pos = np.zeros(3, dtype=float)
-        delta_roll = 0.0
-        delta_pitch = 0.0
-        delta_yaw = 0.0
-
         if target_position is not None:
             current_pos = np.asarray(target_position, dtype=float) * self.vr_to_robot_scale
             if self._prev_position is None:
                 self._prev_position = current_pos.copy()
-            else:
-                raw_delta = (current_pos - self._prev_position) * self.pos_scale
+            elif self._prev_orientation_quat is not None:
+                raw_delta = (
+                    delta_position_body(
+                        self._prev_position,
+                        current_pos,
+                        self._prev_orientation_quat,
+                    )
+                    * pos_scale_eff
+                )
                 self._prev_position = current_pos.copy()
-                delta_pos = self._remap_position(raw_delta)
+                delta_pos = remap_position(raw_delta, self.axis_remap)
                 delta_pos = self._clip_delta_pos(delta_pos)
 
-            if wrist_roll_deg is not None:
-                if self._prev_wrist_roll is None:
-                    self._prev_wrist_roll = float(wrist_roll_deg)
-                else:
-                    delta_roll = (float(wrist_roll_deg) - self._prev_wrist_roll) * self.angle_scale
-                    self._prev_wrist_roll = float(wrist_roll_deg)
-                    delta_roll = self._clip_delta_angle(delta_roll)
-
-            if wrist_flex_deg is not None:
-                if self._prev_wrist_flex is None:
-                    self._prev_wrist_flex = float(wrist_flex_deg)
-                else:
-                    delta_pitch = (float(wrist_flex_deg) - self._prev_wrist_flex) * self.angle_scale
-                    self._prev_wrist_flex = float(wrist_flex_deg)
-                    delta_pitch = self._clip_delta_angle(delta_pitch)
-
-            if wrist_yaw_deg is not None:
-                if self._prev_wrist_yaw is None:
-                    self._prev_wrist_yaw = float(wrist_yaw_deg)
-                else:
-                    delta_yaw = (float(wrist_yaw_deg) - self._prev_wrist_yaw) * self.angle_scale
-                    self._prev_wrist_yaw = float(wrist_yaw_deg)
-                    delta_yaw = self._clip_delta_angle(delta_yaw)
-
-        delta_roll, delta_pitch, delta_yaw = self._remap_angles(delta_roll, delta_pitch, delta_yaw)
+        delta_rx, delta_ry, delta_rz = self._orientation_delta_rotvec(
+            orientation_quat,
+            angle_scale=angle_scale_eff,
+        )
         delta_pos = self._apply_deadzone_pos(delta_pos)
-        delta_roll = self._apply_deadzone_angle(delta_roll)
-        delta_pitch = self._apply_deadzone_angle(delta_pitch)
-        delta_yaw = self._apply_deadzone_angle(delta_yaw)
 
         return {
             "ee.enabled": True,
             "ee.delta_x": float(delta_pos[0]),
             "ee.delta_y": float(delta_pos[1]),
             "ee.delta_z": float(delta_pos[2]),
-            "ee.delta_roll": float(delta_roll),
-            "ee.delta_pitch": float(delta_pitch),
-            "ee.delta_yaw": float(delta_yaw),
+            "ee.delta_rx": delta_rx,
+            "ee.delta_ry": delta_ry,
+            "ee.delta_rz": delta_rz,
             "gripper.pos": gripper,
             "vr.trigger": trigger,
             "vr.thumbstick_x": float(thumbstick.get("x", 0.0)),
@@ -165,9 +188,9 @@ class XLeVRDeltaEEMapper(RobotActionProcessorStep):
             "ee.delta_x": 0.0,
             "ee.delta_y": 0.0,
             "ee.delta_z": 0.0,
-            "ee.delta_roll": 0.0,
-            "ee.delta_pitch": 0.0,
-            "ee.delta_yaw": 0.0,
+            "ee.delta_rx": 0.0,
+            "ee.delta_ry": 0.0,
+            "ee.delta_rz": 0.0,
             "gripper.pos": gripper,
             "vr.trigger": trigger,
             "vr.thumbstick_x": float(thumbstick.get("x", 0.0)),
@@ -179,18 +202,6 @@ class XLeVRDeltaEEMapper(RobotActionProcessorStep):
             "vr.button_thumbstick": bool(buttons.get("thumbstick", False)),
         }
 
-    def _remap_position(self, delta: np.ndarray) -> np.ndarray:
-        matrix = np.asarray(self.axis_remap, dtype=float)
-        return matrix @ delta
-
-    def _remap_angles(self, roll: float, pitch: float, yaw: float) -> tuple[float, float, float]:
-        # roll/pitch/yaw deltas are extracted about VR Z/X/Y respectively
-        return (
-            float(roll * self.delta_roll_sign),
-            float(pitch * self.delta_pitch_sign),
-            float(yaw * self.delta_yaw_sign),
-        )
-
     def _apply_deadzone_pos(self, delta: np.ndarray) -> np.ndarray:
         out = delta.copy()
         for i in range(3):
@@ -198,18 +209,30 @@ class XLeVRDeltaEEMapper(RobotActionProcessorStep):
                 out[i] = 0.0
         return out
 
-    def _apply_deadzone_angle(self, value: float) -> float:
-        return 0.0 if abs(value) < self.angle_deadzone_deg else value
+    def _apply_deadzone_rotvec(self, rx: float, ry: float, rz: float) -> tuple[float, float, float]:
+        dz = self._angle_deadzone_rad
+        if abs(rx) < dz:
+            rx = 0.0
+        if abs(ry) < dz:
+            ry = 0.0
+        if abs(rz) < dz:
+            rz = 0.0
+        return rx, ry, rz
 
     def _clip_delta_pos(self, delta: np.ndarray) -> np.ndarray:
         if self.max_delta_pos_m is None:
             return delta
         return np.clip(delta, -self.max_delta_pos_m, self.max_delta_pos_m)
 
-    def _clip_delta_angle(self, value: float) -> float:
-        if self.max_delta_angle_deg is None:
-            return value
-        return float(np.clip(value, -self.max_delta_angle_deg, self.max_delta_angle_deg))
+    def _clip_delta_rotvec(self, rx: float, ry: float, rz: float) -> tuple[float, float, float]:
+        cap = self._max_delta_angle_rad
+        if cap is None:
+            return rx, ry, rz
+        return (
+            float(np.clip(rx, -cap, cap)),
+            float(np.clip(ry, -cap, cap)),
+            float(np.clip(rz, -cap, cap)),
+        )
 
     def transform_features(
         self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
@@ -217,10 +240,7 @@ class XLeVRDeltaEEMapper(RobotActionProcessorStep):
         for feat in (
             "enabled",
             "target_position",
-            "wrist_roll_deg",
-            "wrist_flex_deg",
-            "wrist_yaw_deg",
-            "gripper_closed",
+            "orientation_quat",
             "grip_active",
             "trigger",
             "thumbstick",
@@ -233,9 +253,9 @@ class XLeVRDeltaEEMapper(RobotActionProcessorStep):
             "ee.delta_x": FeatureType.STATE,
             "ee.delta_y": FeatureType.STATE,
             "ee.delta_z": FeatureType.STATE,
-            "ee.delta_roll": FeatureType.STATE,
-            "ee.delta_pitch": FeatureType.STATE,
-            "ee.delta_yaw": FeatureType.STATE,
+            "ee.delta_rx": FeatureType.STATE,
+            "ee.delta_ry": FeatureType.STATE,
+            "ee.delta_rz": FeatureType.STATE,
             "gripper.pos": FeatureType.STATE,
             "vr.trigger": FeatureType.STATE,
             "vr.thumbstick_x": FeatureType.STATE,
