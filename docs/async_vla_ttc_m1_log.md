@@ -48,6 +48,7 @@
 | `AbsoluteActions` transform 是否兼容 batch 维？ | 读源码确认用 ellipsis 索引（`actions[..., :dims] +=`），天然兼容，无需改 |
 | `BasePolicy` 接口只有 `infer(obs)`，直接加参数会破坏第三方实现 | 服务端仅在 `sample_n>1` 时传参；`sample_n=1` 走原调用。第三方 policy 被请求批量采样会 TypeError 并返回错误文本——可接受，暂未加 fallback |
 | `PolicyRecorder` 包装后 `infer(obs)` 单参数，sample_n 会 TypeError | 改为 `**kwargs` 透传 |
+| **复查发现**：verifier `divergence` 原实现 `dist.mean()` 含对角零值，零值占比随 N 变化（N=2 时 50%、N=8 时 12.5%），跨 N 口径不一致——而它后续要作为 adaptive N / HIL 求助的统一触发信号 | 修为严格上三角均值 `dist[np.triu_indices(n, k=1)].mean()`，排除对角；新增场景自测验证跨 N 口径 |
 
 ## 四、需要后期 check 的点（真机/GPU 验证时）
 
