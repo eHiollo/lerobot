@@ -59,11 +59,22 @@ def make_synthetic_pair(
     state: np.ndarray,
     noise_near: float = 0.02,
     noise_far: float = 0.2,
+    dim_noise_scale: np.ndarray | None = None,
     rng: np.random.Generator | None = None,
 ) -> dict:
-    """以 ground-truth chunk 为锚构造合成偏好对（近扰动正例, 远扰动负例）。"""
+    """以 ground-truth chunk 为锚构造合成偏好对（近扰动正例, 远扰动负例）。
+
+    ``dim_noise_scale``: 可选 (D,) 逐维噪声缩放，用于抹平量纲——A10 前 6 维
+    关节为 rad（0.02/0.2 即合理近/远扰动），夹爪为 mm 绝对位置，需放大
+    约 100 倍才是等效扰动。
+    """
     rng = rng or np.random.default_rng()
     anchor = np.asarray(anchor, dtype=np.float32)
-    pos = anchor + rng.normal(scale=noise_near, size=anchor.shape).astype(np.float32)
-    neg = anchor + rng.normal(scale=noise_far, size=anchor.shape).astype(np.float32)
+    scale = (
+        np.ones(anchor.shape[-1], dtype=np.float32)
+        if dim_noise_scale is None
+        else np.asarray(dim_noise_scale, dtype=np.float32)
+    )
+    pos = anchor + rng.normal(size=anchor.shape).astype(np.float32) * (noise_near * scale)
+    neg = anchor + rng.normal(size=anchor.shape).astype(np.float32) * (noise_far * scale)
     return {"state": np.asarray(state, dtype=np.float32).tolist(), "action_a": pos.tolist(), "action_b": neg.tolist(), "label": 1}
