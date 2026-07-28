@@ -111,4 +111,13 @@ Learner (5090): SAC 残差头更新 + ReplayBuffer
 
 ## 六、进度记录
 
-(每个 Phase 完成后在此追加)
+### Phase 0 — 代码完成,待真机验证
+- 新建 `examples/dev_hil/phase0_pi05_openloop.py`
+- 内联 `ChunkBuffer`(等价 openpi ActionChunkBroker,避免引入 `tree` 依赖)
+- 图像预处理 / 动作映射 / ChunkBuffer 逻辑均通过单元验证
+- 依赖:lerobot conda env + openpi-client(通过 sys.path 注入,不污染 lerobot 依赖)
+- **待用户在真机上运行验证**:
+  1. 在 GPU 机器起 π0.5 服务(见脚本头注释)
+  2. `python examples/dev_hil/phase0_pi05_openloop.py --policy-host <GPU_IP> --policy-port 8000 --robot-host 192.168.1.12 --robot-port 8080 --steps 50 --hz 10`
+- **验收标准**:超时比例 <10%,动作合理,无掉帧
+
