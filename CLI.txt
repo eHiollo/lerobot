@@ -53,11 +53,80 @@ python -m lerobot.scripts.lerobot_ws_act_policy_server \
   --debug_every=1 \
   --debug_image_dir=debug_act_obs
 
-#vr (body 系四元数; 机器人 +X上 +Y右 +Z前; 30Hz)
- 真机(无相机)
+#vr (body 系四元数; 机器人 +X上 +Y右 +Z前; 默认 72Hz + 异步发送 + delta 模式)
+# 固件要求: target 模式需 A10 刷 dev/vr_dev 最新(含 GET_STATE/SET_EE_TARGET/GET_EE_STATE); delta 模式原固件即可
+
+ # 真机 delta 模式(帧间增量, 累加; 原始行为, 原固件可跑)
  python examples/xlevr_to_a10/teleoperate.py --robot-host 192.168.1.12 --robot-port 8080
+ # 真机 target 模式(原点增量绝对目标, 零漂移; 需最新 dev/vr_dev 固件)
+ python examples/xlevr_to_a10/teleoperate.py --robot-host 192.168.1.12 --robot-port 8080 --ee-target
+ # 强制 delta 模式(覆盖 --ee-target)
+ python examples/xlevr_to_a10/teleoperate.py --robot-host 192.168.1.12 --robot-port 8080 --ee-delta
+ # 降回 30Hz / 关闭异步发送(原始行为)
+ python examples/xlevr_to_a10/teleoperate.py --robot-host 192.168.1.12 --robot-port 8080 --fps 30 --no-async-send
  # 机械臂 TCP 重启后自动重连(默认开启); 断线即退出: --no-reconnect
- 只测试vr(打印输出)
+ # 关闭异步发送: --no-async-send ; 启用相机: --with-cameras
+
+ # 只测试vr(打印输出, 不连机器人)
  python examples/xlevr_to_a10/teleoperate.py --vr-only
- 打印tcp中的action
+ # 只测 vr + target 模式(打印 ee.target_*, 无 EE 反馈时退化为 hold)
+ python examples/xlevr_to_a10/teleoperate.py --vr-only --ee-target
+ # 打印tcp中的action
  python examples/xlevr_to_a10/test_action_print.py
+
+#录制: 控制高频(72Hz) + 数据集低频(30Hz 子采样) —— 不传 control_fps 则完全原始行为(每帧存)
+python src/lerobot/scripts/lerobot_record.py \
+  --robot.type=a10_follower --robot.host=192.168.1.12 --robot.port=8080 \
+  --teleop.type=xlevr --teleop.xlevr_path=/home/allen/Allen/XLeRobot/XLeVR \
+  --dataset.fps=30 --dataset.control_fps=72 \
+  --dataset.root=<DATASET_ROOT> --dataset.repo_id=<USER>/<DATASET> --dataset.push_to_hub=false
+# 录制 target 模式数据集(零漂移; 需最新固件; 机器人端与 teleop 端模式必须一致)
+python src/lerobot/scripts/lerobot_record.py \
+  --robot.type=a10_follower --robot.host=192.168.1.12 --robot.port=8080 \
+  --robot.use_ee_target=true \
+  --teleop.type=xlevr --teleop.xlevr_path=/home/allen/Allen/XLeRobot/XLeVR \
+  --teleop.use_ee_target_mode=true \
+  --dataset.fps=30 --dataset.control_fps=72 \
+  --dataset.root=<DATASET_ROOT> --dataset.repo_id=<USER>/<DATASET> --dataset.push_to_hub=false
+
+
+#==================== dev/hil: π0.5 + 残差 HIL RL 平台 ====================
+# 三个仓库协同: openpi(π0.5 服务) + lerobot(actor/learner) + A10_new(真机)
+# 顺序: 先起 π0.5 服务 → 再起 A10 真机 → 最后起 learner → actor
+
+#-------- 1. π0.5 推理服务 (openpi 仓库, GPU 机器, websocket :8000) ----------
+cd $HOME/Allen/openpi
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.5 \
+ HF_LEROBOT_HOME=$HOME/Allen/openpi HF_DATASETS_OFFLINE=1 HF_HUB_OFFLINE=1 \
+ uv run scripts/serve_policy.py policy:checkpoint \
+  --policy.config=pi05_a10_finetune \
+  --policy.dir=checkpoints/pi05_a10_finetune/Reach_5_9_1/130000
+
+#-------- 2. A10 真机 (A10_new, TCP:8080) ----------
+cd $HOME/Allen/openpi/third_party/A10_new && cmake -B build && cmake --build build
+./build/bin/kaanhbin 5866
+# 在 Aris CLI 里执行 policy 启动策略驱动: policy
+# 停止: CLI 执行 stop, 或桥接/actor Ctrl+C 自动 STOP_POLICY
+
+#-------- 3. Phase 0 开环验证 (lerobot 仓库, 机器人 PC) ----------
+# 先起 π0.5 服务 + A10 真机, 再跑此脚本; 验证 π0.5+A10 在 10Hz 稳定
+conda activate lerobot
+cd $HOME/Allen/lerobot
+python examples/dev_hil/phase0_pi05_openloop.py \
+  --policy-host <GPU_IP> --policy-port 8000 \
+  --robot-host 192.168.1.12 --robot-port 8080 \
+  --steps 50 --hz 10
+# dry-run (不连机器人, 只验证推理服务 + obs 构建):
+python examples/dev_hil/phase0_pi05_openloop.py --dry-run --policy-host <GPU_IP> --policy-port 8000 --steps 10
+# 验收: 超时比例 <10%, 动作合理无掉帧
+
+#-------- 4. HIL-SERL 残差 RL 训练 (lerobot 仓库, 分布式 actor/learner) ----------
+conda activate lerobot
+cd $HOME/Allen/lerobot
+# 先起 learner (开 gRPC 服务, 等 actor 连)
+python -m lerobot.rl.learner --config_path src/lerobot/configs/train_config_residual_pi05_a10.json
+# 再起 actor (连 learner + π0.5 服务 + A10 + XLeVR)
+python -m lerobot.rl.actor --config_path src/lerobot/configs/train_config_residual_pi05_a10.json
+# 注意: actor 需 XLeVR 已连 (VR 头显就绪); learner/actor 必须用同一份 config
+# 监控: wandb 显示 reward 上升 + intervention rate 下降
+
