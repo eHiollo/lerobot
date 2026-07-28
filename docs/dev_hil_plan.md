@@ -1,0 +1,114 @@
+# A10 真机强化学习平台搭建 (dev/hil)
+
+> 目标:在 A10 真机上搭建 **π0.5 + 残差 HIL RL** 平台,验证"VLA BC 预训练 + HIL 残差 RL 微调 > 纯 VLA"的核心 claim,后续做论文新颖性。
+
+## 一、背景与现状(已核实)
+
+### 已有资产
+- **π0.5 微调 checkpoint**:`openpi/checkpoints/pi05_a10_finetune/Reach_5_9_1/130000`
+  - 配置 `pi05_a10_finetune`,LoRA(gemma_2b_lora + gemma_300m_lora)
+  - 任务 "Reach the yellow lemon",数据集 `dataset/dataset_5_9`(LeRobot 格式)
+- **推理服务**:`uv run scripts/serve_policy.py policy:checkpoint --policy.config=pi05_a10_finetune --policy.dir=...`(websocket :8000)
+- **部署桥接**:`openpi/third_party/A10_new/client/run_bridge.py`,async 双缓冲 10Hz,发 `SET_JOINTS_BATCH`
+- **A10 TCP 控制器**:`third_party/A10_new`,端口 8080
+- **XLeVR 遥操作**:已跑通,EE delta/target 模式
+- **LeRobot HIL-SERL 基础设施**:SAC / actor-learner(gRPC)/ processor / ReplayBuffer / reward classifier 全部内置
+
+### 关键事实
+| 项 | 值 |
+|----|----|
+| 动作格式 | 7D = `[joint_1..6, gripper]`,训练时前 6 维转 delta、gripper 绝对;推理输出经 `AbsoluteActions` 转回**绝对关节目标** |
+| action_horizon | 10 |
+| 观测 | `observation/state`(7D) + `observation/images/right`(224² CHW) + `observation/images/top`(224² CHW) + `prompt` |
+| 夹爪 | 100mm 行程,0–100mm,绝对位置 |
+| GPU | 5090 (24GB) |
+
+## 二、架构
+
+```
+π0.5 WebsocketPolicyServer (5090, 独立进程)
+   infer({state, images/right, images/top, prompt}) → actions [10, 7] (绝对关节)
+        ▲  WebsocketClientPolicy + ActionChunkBroker (chunk=10)
+        │  每步释放 a_vla[t] (7D 绝对关节)
+        ▼
+ResidualSACHead (本地小网络: resnet10 encoder + actor/critic MLP)
+   输入: 相机(128²) + 关节状态(7) + a_vla[t](7)
+   输出: Δa (7D 关节修正)
+        ▼
+action = a_vla[t] + α·Δa   (α 起步 0.1)
+        ▼
+A10RobotEnv → A10TCPClient.send_joint_targets(绝对关节 7D)  [SET_JOINTS]
+        ▼
+reward (classifier / 手动) + XLeVR 干预 (override action)
+        ▼ transitions
+Learner (5090): SAC 残差头更新 + ReplayBuffer
+  offline ← dataset_5_9 ; online ← actor
+```
+
+**维度全链路对齐**:π0.5 输出 7D 绝对关节 → 残差 7D → SET_JOINTS 7D,无需维度转换。
+
+## 三、分阶段实施
+
+### Phase 0 — π0.5 推理服务在环验证
+- 用 `WebsocketClientPolicy` + `ActionChunkBroker` 写最小 actor 客户端
+- 固定 prompt,每 10 步拉一次 chunk,以 10Hz 取 `a_vla[t]` 送 A10
+- **验收**:π0.5 + A10 开环跑 50 步,无掉帧,动作合理
+- **止损**:若推理跟不上 10Hz,降级到 5Hz 或换 diffusion policy
+
+### Phase 1 — A10RobotEnv 适配层
+- 新建 `src/lerobot/rl/gym_manipulator_a10.py`
+- `A10RobotEnv(gym.Env)`:不依赖 `robot.bus`,直接 `get_observation`/`send_action`
+- 动作空间 7D 绝对关节(与 π0.5 对齐),reset 用 `SET_JOINTS` 平滑插值
+- **验收**:env 单独跑随机动作 100 步稳定;π0.5 闭环跑通一个 episode
+
+### Phase 2 — XLeVR 干预适配
+- 给 `XLeVRTeleop` 加 `get_teleop_events()`(复用 VREventHandler)
+  - trigger → is_intervention;grip → success;thumbstick → rerecord
+- 让 `get_action()` 返回 EE delta dict
+- **验收**:π0.5 闭环,人按 VR trigger 能接管,松开回 π0.5
+
+### Phase 3 — ResidualSAC 残差策略 + offline 预热
+- 新建 `src/lerobot/policies/residual_sac/`
+  - `ResidualSACConfig`:base_policy_server host/port、α、网络
+  - `ResidualSACPolicy`:持有 π0.5 客户端(不内嵌)、小 ResNet encoder、actor/critic head
+  - `select_action`:拉 `a_vla` + 本地 Δa → `a_vla + α·Δa`
+- ReplayBuffer offline ← `dataset_5_9`(`ReplayBuffer.from_lerobot_dataset`)
+- critic Q(s, a) 中 a = combined action,梯度只流过 Δa
+- **验收**:offline critic loss 下降,actor 残差不发散
+
+### Phase 4 — 在线 HIL 训练
+- actor rollout:π0.5 server 出 chunk → 残差加 Δa → env → transition → learner
+- 人用 XLeVR 干预,干预帧用 teleop_action,仍进 buffer
+- wandb:episodic reward、intervention rate、critic loss
+- **验收**:intervention rate 下降;成功率 > 纯 π0.5
+
+### Phase 5 — 评估与论文实验
+- baseline:纯 π0.5
+- 对比:π0.5 + 残差(无 HIL) / π0.5 + 残差 + HIL
+- 指标:成功率、cycle time、intervention rate 曲线
+- **验收**:π0.5 + HIL 残差 > 纯 π0.5,可复现曲线
+
+## 四、文件改动清单
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `docs/dev_hil_plan.md` | 新建 | 本文档 |
+| `src/lerobot/rl/gym_manipulator_a10.py` | 新建 | `A10RobotEnv` |
+| `src/lerobot/teleoperators/xlevr/teleop_xlevr.py` | 改 | 加 `get_teleop_events()` |
+| `src/lerobot/policies/residual_sac/` | 新建 | 残差 SAC 策略 |
+| `src/lerobot/rl/actor.py` | 改 | dispatch a10 + 残差头 + π0.5 客户端 |
+| `src/lerobot/rl/learner.py` | 改 | 支持残差 SAC 更新 |
+| `src/lerobot/configs/train_config_residual_pi05_a10.json` | 新建 | 训练配置 |
+
+## 五、风险与止损
+
+| 风险 | 缓解 |
+|------|------|
+| π0.5 推理跟不上 10Hz | 降级 5Hz 或换 diffusion policy |
+| 残差 SAC 发散 | α 设小 (0.01) 或先只训 critic |
+| 任务太难 | 先在 Reach 任务跑通,再迁移抓取 |
+| 真机炸机 | 关节限位 clamp;reset_pose 安全姿态;e-stop |
+
+## 六、进度记录
+
+(每个 Phase 完成后在此追加)
