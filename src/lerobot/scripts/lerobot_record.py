@@ -276,6 +276,8 @@ def record_loop(
         raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
 
     # 控制环频率：control_fps > fps 时，控制按 control_fps 跑，数据集按 fps 子采样。
+    # control_fps 为 None 或等于 fps 时，保持原始行为(每帧都存、每帧都建 frame)，避免回归。
+    subsample = control_fps is not None and int(control_fps) != fps
     eff_control_fps = int(control_fps) if control_fps else fps
     if eff_control_fps < fps:
         raise ValueError(
@@ -336,7 +338,11 @@ def record_loop(
         # 仅在需要保存到数据集或推理时构建 dataset frame(昂贵)。
         need_dataset_frame = policy is not None or dataset is not None
         now_t = time.perf_counter()
-        should_save = dataset is not None and (now_t - last_save_t >= save_period - 1e-4)
+        # 非子采样(control_fps 未显式提高)时保持原始行为：每帧都存；仅在高频控制时按时间子采样。
+        if not subsample:
+            should_save = dataset is not None
+        else:
+            should_save = dataset is not None and (now_t - last_save_t >= save_period - 1e-4)
         if need_dataset_frame and (policy is not None or should_save):
             observation_frame = build_dataset_frame(dataset.features, obs_processed, prefix=OBS_STR)
 

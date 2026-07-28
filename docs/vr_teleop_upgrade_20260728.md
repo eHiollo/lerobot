@@ -191,3 +191,12 @@ python src/lerobot/scripts/lerobot_record.py \
 - VR plan 未运行时：`SET_EE_TARGET` 无消费者（仅 VR plan 消费），即便发出也无效，无害。
 - 错配（target 动作 + delta 配置）：`send_action` 直接报错，不发送。
 
+### 10.6 默认路径不回归（原始实机流程保持不变）
+- `lerobot_record.record_loop`：`control_fps` 未显式提高时（`None` 或等于 `fps`）走原始
+  "每帧都存、每帧都建 frame、按 `1/fps` 节拍" 逻辑，仅在高频控制时才按时间子采样。
+- `a10_follower`：`use_ee_target=False`（默认）→ delta 特征/delta 发送/不调 `GET_EE_STATE`，与原始一致。
+- `a10_client`：`enable_async_send` 未调用时（`lerobot-record` 路径）→ 同步发送；仅多 `TCP_NODELAY`（降尾延迟，非回归）。
+- `factory`：`use_ee_target_mode=False`（默认）→ `XLeVRDeltaEEMapper`，参数与原始一致。
+- 结论：不带任何新 flag 跑 `lerobot-record` 录制/推理，行为与改动前完全一致。
+
+
