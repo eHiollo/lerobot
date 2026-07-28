@@ -146,6 +146,45 @@ Learner (5090): SAC 残差头更新 + ReplayBuffer
   - actor.py 接线:每步调 `policy.init_base_client()` + `select_action(batch, base_obs)`
 - **待真机验证**:π0.5 服务在环时 select_action 返回合理 combined action
 
+### Phase 4 — 接线规格完成,实现待真机集成
+
+训练配置 `src/lerobot/configs/train_config_residual_pi05_a10.json` 已建。
+
+#### actor.py 需要的修改 (4 处)
+
+1. **import A10 + residual_sac**:`from lerobot.robots import a10_follower` (行 ~68 附近)
+2. **policy 初始化后调 base client**:`policy = make_policy(...)` 后,若 `isinstance(policy, ResidualSACPolicy)`,`policy.init_base_client()`
+3. **select_action 传 base_obs**:`act_with_policy` 内,每步构建 `base_obs`(state 7D + images 224² CHW + prompt)传给 `policy.select_action(batch, base_obs=base_obs)`
+4. **干预分支**:检测 `teleop_events[IS_INTERVENTION]` 时:
+   - 不调 `env.step`,改为 `robot.client.send_ee_delta(xlevr_ee_delta_7d)` 直接驱动
+   - 回读关节 `robot.get_observation()` 作为 transition 的 action(归一化到 [-1,1])
+   - 仍把 transition 推入 transitions_queue 进 buffer
+
+#### learner.py 需要的修改 (1 处)
+
+- `update_policy` 内 actor loss 计算:若 policy 是 ResidualSACPolicy,
+  - 从 batch 取 `a_vla_norm`(complementary_data,detach)
+  - actor 输出 Δa,构造 `combined = a_vla_norm + α·Δa`
+  - actor loss = `-Q(s, combined).mean() + α_ent·log_prob(Δa)`
+  - critic loss 不变(用 buffer 中的 combined action)
+
+#### 启动命令 (真机集成时)
+
+```bash
+# 终端1: π0.5 服务 (openpi 仓库)
+cd ~/Allen/openpi && uv run scripts/serve_policy.py policy:checkpoint \
+  --policy.config=pi05_a10_finetune \
+  --policy.dir=checkpoints/pi05_a10_finetune/Reach_5_9_1/130000
+
+# 终端2: learner
+python -m lerobot.rl.learner --config_path src/lerobot/configs/train_config_residual_pi05_a10.json
+
+# 终端3: actor
+python -m lerobot.rl.actor --config_path src/lerobot/configs/train_config_residual_pi05_a10.json
+```
+
+**待真机验证**:三进程跑通,wandb 显示 reward 上升 + intervention rate 下降。
+
 ## 六、进度记录
 
 ### Phase 0 — 代码完成,待真机验证

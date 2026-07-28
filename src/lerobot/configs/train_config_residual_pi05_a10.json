@@ -1,0 +1,101 @@
+{
+  "policy": {
+    "type": "residual_sac",
+    "device": "cuda",
+    "storage_device": "cuda",
+    "vision_encoder_name": "helper2424/resnet10",
+    "freeze_vision_encoder": true,
+    "shared_encoder": true,
+    "temperature_init": 0.01,
+    "utd_ratio": 1,
+    "online_step_before_learning": 100,
+    "online_steps": 100000,
+    "online_buffer_capacity": 100000,
+    "offline_buffer_capacity": 100000,
+    "actor_learner_config": {
+      "learner_host": "127.0.0.1",
+      "learner_port": 50051,
+      "policy_parameters_push_frequency": 2
+    },
+    "base_policy_host": "127.0.0.1",
+    "base_policy_port": 8000,
+    "base_policy_prompt": "Reach the yellow lemon",
+    "base_action_horizon": 10,
+    "base_action_dim": 7,
+    "residual_alpha": 0.1,
+    "joint_lower": [-170.0, -90.0, -90.0, -90.0, -90.0, -170.0, 0.0],
+    "joint_upper": [170.0, 90.0, 90.0, 90.0, 90.0, 170.0, 100.0],
+    "input_features": {
+      "observation.state": {"type": "STATE", "shape": [7]},
+      "observation.images.right_wrist_0_rgb": {"type": "VISUAL", "shape": [3, 128, 128]}
+    },
+    "output_features": {
+      "action": {"type": "ACTION", "shape": [7]}
+    },
+    "dataset_stats": {
+      "observation.state": {"min": [-170,-90,-90,-90,-90,-170,0], "max": [170,90,90,90,90,170,100]},
+      "observation.images.right_wrist_0_rgb": {"mean": [0.485,0.456,0.406], "std": [0.229,0.224,0.225]},
+      "action": {"min": [-1,-1,-1,-1,-1,-1,-1], "max": [1,1,1,1,1,1,1]}
+    }
+  },
+  "env": {
+    "type": "gym_manipulator",
+    "name": "real_robot",
+    "fps": 10,
+    "task": "reach_yellow_lemon",
+    "robot": {
+      "type": "a10_follower",
+      "host": "192.168.1.12",
+      "port": 8080,
+      "n_joints": 7,
+      "use_ee_delta": false,
+      "cameras": {
+        "right_wrist_0_rgb": {
+          "type": "opencv",
+          "index_or_path": 0,
+          "fps": 30,
+          "width": 640,
+          "height": 480,
+          "rotation": "ROTATE_180"
+        }
+      }
+    },
+    "teleop": {
+      "type": "xlevr",
+      "xlevr_path": "/home/allen/Allen/XLeRobot/XLeVR",
+      "use_ee_target_mode": false,
+      "enable_left_events": true
+    },
+    "processor": {
+      "control_mode": "xlevr",
+      "observation": {
+        "display_cameras": false
+      },
+      "image_preprocessing": {
+        "crop_params_dict": {},
+        "resize_size": [128, 128]
+      },
+      "reset": {
+        "fixed_reset_joint_positions": [0, 0, 0, 0, 0, 0, 50],
+        "reset_time_s": 5.0,
+        "control_time_s": 15.0,
+        "terminate_on_success": true
+      },
+      "reward_classifier": null,
+      "max_gripper_pos": 100.0
+    }
+  },
+  "dataset": {
+    "repo_id": "allen/a10_reach_residual",
+    "task": "reach_yellow_lemon",
+    "root": "data/a10_reach_residual"
+  },
+  "output_dir": "outputs/residual_pi05_a10",
+  "job_name": "residual_pi05_a10_reach",
+  "seed": 42,
+  "wandb": {
+    "enable": true,
+    "project": "dev_hil",
+    "entity": null
+  }
+}
