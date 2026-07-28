@@ -1,6 +1,7 @@
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 import numpy as np
 from functools import cached_property
@@ -41,6 +42,16 @@ class A10Follower(Robot):
         
         # Initialize cameras from config (standard LeRobot way)
         self.cameras = make_cameras_from_configs(config.cameras)
+        self._cam_pool: ThreadPoolExecutor | None = None
+
+    def _get_cam_pool(self) -> ThreadPoolExecutor:
+        # 多相机并行抓取用；单相机时也走同一路径，开销可忽略。
+        if self._cam_pool is None:
+            n = max(1, len(self.cameras))
+            self._cam_pool = ThreadPoolExecutor(
+                max_workers=n, thread_name_prefix="A10Cam"
+            )
+        return self._cam_pool
 
     @property
     def _motors_ft(self) -> dict[str, type]:
@@ -114,6 +125,9 @@ class A10Follower(Robot):
         self.client.disconnect()
         for cam in self.cameras.values():
             cam.disconnect()
+        if self._cam_pool is not None:
+            self._cam_pool.shutdown(wait=False)
+            self._cam_pool = None
 
     # ---------- 标定 / 配置（先空着） ----------
 
@@ -137,18 +151,16 @@ class A10Follower(Robot):
             raise ConnectionError(f"{self} is not connected.")
 
         start = time.perf_counter()
-        state = self.client.get_observation()  # {"q": ...}
+        obs_dict: dict[str, Any] = {}
 
-        q = state["q"]
-        obs_dict = {}
-        for i, name in enumerate(self.joint_names):
-            if i < len(q):
-                obs_dict[f"{name}.pos"] = float(q[i])
-
-        # target 模式下额外取末端位姿，供 VR 端"原点增量"处理器抓取 robot_origin。
+        # 关节 + (target 模式)末端：target 模式用 GET_STATE 一次往返拿 q+ee，省一个 RTT。
         if self.config.use_ee_target:
-            ee_state = self.client.get_ee_state()
-            ee = ee_state.get("ee")
+            state = self.client.get_state()
+            q = state["q"]
+            for i, name in enumerate(self.joint_names):
+                if i < len(q):
+                    obs_dict[f"{name}.pos"] = float(q[i])
+            ee = state.get("ee")
             if ee is not None:
                 obs_dict["ee.x"] = float(ee[0])
                 obs_dict["ee.y"] = float(ee[1])
@@ -156,16 +168,28 @@ class A10Follower(Robot):
                 obs_dict["ee.rx"] = float(ee[3])
                 obs_dict["ee.ry"] = float(ee[4])
                 obs_dict["ee.rz"] = float(ee[5])
+        else:
+            state = self.client.get_observation()  # {"q": ...}
+            q = state["q"]
+            for i, name in enumerate(self.joint_names):
+                if i < len(q):
+                    obs_dict[f"{name}.pos"] = float(q[i])
 
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
 
-        # 2. Get Images from Local Cameras
-        for cam_key, cam in self.cameras.items():
-            start = time.perf_counter()
-            obs_dict[cam_key] = cam.async_read(timeout_ms=1000)
-            dt_ms = (time.perf_counter() - start) * 1e3
-            logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
+        # 相机并行抓取：多相机时省累加延迟（顺序读 N 路相机 = N×单路延迟）。
+        if self.cameras:
+            pool = self._get_cam_pool()
+            futures = {
+                pool.submit(cam.async_read, timeout_ms=1000): cam_key
+                for cam_key, cam in self.cameras.items()
+            }
+            for fut, cam_key in futures.items():
+                t0 = time.perf_counter()
+                frame = fut.result()
+                obs_dict[cam_key] = frame
+                logger.debug(f"{self} read {cam_key}: {(time.perf_counter()-t0)*1e3:.1f}ms")
 
         return obs_dict
 

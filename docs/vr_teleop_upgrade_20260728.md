@@ -199,4 +199,26 @@ python src/lerobot/scripts/lerobot_record.py \
 - `factory`：`use_ee_target_mode=False`（默认）→ `XLeVRDeltaEEMapper`，参数与原始一致。
 - 结论：不带任何新 flag 跑 `lerobot-record` 录制/推理，行为与改动前完全一致。
 
+## 11. 性能优化（合并状态请求 + 多相机并行）
+
+### 11.1 合并状态请求 `GET_STATE`（省一个 RTT/帧）
+- target 模式原本每帧发 `GET_FOLLOWER_STATE`（关节）+ `GET_EE_STATE`（末端）两次同步往返。
+- A10 端新增 `GET_STATE`：一次返回 `{"q":[7关节+夹爪], "ee":[6D]|null}`（`a10_tcp_server.hpp/cpp`）。
+- Python 端 `a10_client.get_state()` 一次拿 q+ee；`a10_follower.get_observation` 在 target 模式改用
+  `get_state()`，delta 模式仍用 `get_observation()`（关节），**默认路径不变**。
+- 顺手修 `send_follower_state` 的潜在越界（resize 到 12 却访问 `[12]` → 改为 13）。
+- 子模块指针更新至 A10_new `9a10d6e`。
+
+### 11.2 多相机并行抓取
+- `a10_follower.get_observation` 原顺序 `for cam in cameras: cam.async_read(...)`，N 路相机延迟累加。
+- 改为持久 `ThreadPoolExecutor(max_workers=N)` 并行提交所有相机 `async_read`，再统一 `result()` 收集，
+  总延迟 ≈ max(单路) 而非 sum(单路)。池在 `disconnect` 时 `shutdown`。
+- 单相机时走同一路径，开销可忽略；无相机时不创建池。
+
+### 11.3 收益与兼容
+- 72Hz 控制环每帧预算 ~13.9ms：省一个 LAN RTT（~0.5–1ms）+ 多相机并行（两路省 ~5–15ms），
+  显著降低 `get_observation` 占比，给控制环留更多裕度。
+- delta 模式 / 无相机 / 不带新 flag：行为与改动前一致（默认路径不回归）。
+
+
 

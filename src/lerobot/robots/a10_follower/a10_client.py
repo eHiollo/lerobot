@@ -418,6 +418,49 @@ class A10TCPClient:
                 return {"ee": None}
             return {"ee": np.asarray(ee, dtype=np.float64)}
 
+    def get_state(self) -> dict:
+        """
+        GET_STATE：一次往返返回 {q, ee}，省去 target 模式下分别发
+        GET_FOLLOWER_STATE + GET_EE_STATE 的一次 RTT。
+
+        返回 {"q": np.ndarray(8,), "ee": np.ndarray(6,) | None}。
+        若机器人端尚未更新过 EE 位姿(VR plan 未启动)，ee 为 None。
+        """
+        with self.tx_lock:
+            if not self.is_connected:
+                raise ConnectionError("A10TCPBus is not connected")
+
+            orig_timeout = self.sock.gettimeout() if self.sock is not None else None
+            if self.sock is not None:
+                try:
+                    self.sock.settimeout(2.0)
+                except OSError:
+                    pass
+            try:
+                self._send_line("GET_STATE")
+                while True:
+                    header_line = self._recvline()
+                    if not header_line:
+                        raise ConnectionError("Received empty line from server")
+                    if header_line.strip().startswith("{"):
+                        try:
+                            header = json.loads(header_line)
+                            break
+                        except json.JSONDecodeError:
+                            continue
+                    continue
+            finally:
+                if self.sock is not None and orig_timeout is not None:
+                    try:
+                        self.sock.settimeout(orig_timeout)
+                    except OSError:
+                        pass
+
+            q = np.asarray(header["q"], dtype=np.float32)
+            ee_raw = header.get("ee")
+            ee = None if ee_raw is None else np.asarray(ee_raw, dtype=np.float64)
+            return {"q": q, "ee": ee}
+
     def send_ee_target(self, actions: list[float]) -> None:
         """
         SET_EE_TARGET：发送绝对末端目标(7D [x,y,z,rx,ry,rz(rad),gripper])。
