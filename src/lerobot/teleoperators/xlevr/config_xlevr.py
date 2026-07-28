@@ -23,6 +23,15 @@ class XLeVRTeleopConfig(TeleoperatorConfig):
 
     control_fps: int = 30
 
+    # True = 闭环"原点增量"绝对目标(SET_EE_TARGET, 零漂移, 需机器人 use_ee_target)；
+    # False = 帧间增量(SET_EE_DELTA, 累加语义)。
+    use_ee_target_mode: bool = False
+
+    # One Euro 滤波参数(仅 target 模式生效)。
+    enable_filter: bool = True
+    filter_min_cutoff: float = 1.0
+    filter_beta: float = 0.007
+
     pos_deadzone_m: float = 0.0005
     angle_deadzone_deg: float = 0.05
     max_delta_pos_m: float | None = None

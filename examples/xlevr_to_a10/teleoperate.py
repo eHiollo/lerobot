@@ -32,7 +32,7 @@ ROBOT_LINK_ERRORS = (
     TimeoutError,
 )
 
-FPS = 30
+FPS = 72
 XLEVR_PATH = "/home/allen/Allen/XLeRobot/XLeVR"
 DEFAULT_JOINTS = ("joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6", "gripper")
 
@@ -49,6 +49,17 @@ def parse_args():
     parser.add_argument("--robot-timeout-ms", type=int, default=300000, help="机器人 TCP 连接超时")
     parser.add_argument("--xlevr-path", default=XLEVR_PATH)
     parser.add_argument("--fps", type=int, default=FPS)
+    parser.add_argument(
+        "--ee-target",
+        action="store_true",
+        help="使用闭环原点增量绝对目标(SET_EE_DELTA 累加 -> SET_EE_TARGET 替换, 零漂移)。"
+             "需 A10 端 dev/vr_dev 固件支持 GET_EE_STATE/SET_EE_TARGET。",
+    )
+    parser.add_argument(
+        "--ee-delta",
+        action="store_true",
+        help="强制使用帧间增量(SET_EE_DELTA)模式，覆盖 --ee-target。",
+    )
     parser.add_argument(
         "--with-cameras",
         action="store_true",
@@ -127,10 +138,12 @@ def main():
     args = parse_args()
     logging.basicConfig(level=logging.INFO)
 
+    use_ee_target = args.ee_target and not args.ee_delta
     teleop_config = XLeVRTeleopConfig(
         xlevr_path=args.xlevr_path,
         arm="right",
         control_fps=args.fps,
+        use_ee_target_mode=use_ee_target,
     )
     teleop = XLeVRTeleop(teleop_config)
     teleop_action_processor, robot_action_processor, _ = make_xlevr_a10_processors(teleop_config)
@@ -141,7 +154,8 @@ def main():
             host=args.robot_host,
             port=args.robot_port,
             timeout_ms=args.robot_timeout_ms,
-            use_ee_delta=True,
+            use_ee_delta=not use_ee_target,
+            use_ee_target=use_ee_target,
         )
         if not args.with_cameras:
             robot_cfg_kwargs["cameras"] = {}
@@ -186,6 +200,8 @@ def main():
             print(f"已连接机器人，@ {args.fps}Hz 发送 SET_EE_DELTA actions。")
 
     print("XLeVR 遥操作运行中，Ctrl+C 停止。")
+    mode_str = "原点增量绝对目标(SET_EE_TARGET, 零漂移)" if use_ee_target else "帧间增量(SET_EE_DELTA, 累加)"
+    print(f"控制模式: {mode_str} | 频率: {args.fps}Hz")
     print("右手 squeeze=粗调 | 前扳机=精调(无需 squeeze) | 摇杆 x=夹爪 | 左手摇杆=record.py 事件")
     frame = 0
     robot_link_ok = robot is not None and robot.is_connected
@@ -234,18 +250,20 @@ def main():
                         raise
                     print("机器人已断开，VR 仍运行；等待对端程序重启后自动重连 ...")
             elif robot is None and frame % args.print_every == 0:
-                keys = (
-                    "ee.delta_x",
-                    "ee.delta_y",
-                    "ee.delta_z",
-                    "ee.delta_rx",
-                    "ee.delta_ry",
-                    "ee.delta_rz",
-                    "gripper.pos",
-                    "vr.thumbstick_x",
-                    "vr.button_squeeze",
-                    "vr.trigger",
-                )
+                if use_ee_target:
+                    keys = (
+                        "ee.target_x", "ee.target_y", "ee.target_z",
+                        "ee.target_rx", "ee.target_ry", "ee.target_rz",
+                        "ee.enabled", "gripper.pos",
+                        "vr.thumbstick_x", "vr.button_squeeze", "vr.trigger",
+                    )
+                else:
+                    keys = (
+                        "ee.delta_x", "ee.delta_y", "ee.delta_z",
+                        "ee.delta_rx", "ee.delta_ry", "ee.delta_rz",
+                        "gripper.pos",
+                        "vr.thumbstick_x", "vr.button_squeeze", "vr.trigger",
+                    )
                 summary = ", ".join(f"{k}={robot_action.get(k)}" for k in keys if k in robot_action)
                 print(f"[frame {frame}] {summary}")
 

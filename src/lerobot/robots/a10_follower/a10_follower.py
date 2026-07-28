@@ -54,10 +54,33 @@ class A10Follower(Robot):
 
     @cached_property
     def observation_features(self) -> dict[str, type | tuple]:
-        return {**self._motors_ft, **self._cameras_ft}
+        feats = {**self._motors_ft, **self._cameras_ft}
+        if self.config.use_ee_target:
+            feats.update(
+                {
+                    "ee.x": float,
+                    "ee.y": float,
+                    "ee.z": float,
+                    "ee.rx": float,
+                    "ee.ry": float,
+                    "ee.rz": float,
+                }
+            )
+        return feats
 
     @cached_property
     def action_features(self) -> dict[str, type]:
+        if self.config.use_ee_target:
+            return {
+                "ee.enabled": bool,
+                "ee.target_x": float,
+                "ee.target_y": float,
+                "ee.target_z": float,
+                "ee.target_rx": float,
+                "ee.target_ry": float,
+                "ee.target_rz": float,
+                "gripper.pos": float,
+            }
         if self.config.use_ee_delta:
             return {
                 "ee.enabled": bool,
@@ -112,15 +135,27 @@ class A10Follower(Robot):
     def get_observation(self) -> dict[str, Any]:
         if not self.is_connected:
             raise ConnectionError(f"{self} is not connected.")
-        
+
         start = time.perf_counter()
         state = self.client.get_observation()  # {"q": ...}
-        
+
         q = state["q"]
         obs_dict = {}
         for i, name in enumerate(self.joint_names):
             if i < len(q):
                 obs_dict[f"{name}.pos"] = float(q[i])
+
+        # target 模式下额外取末端位姿，供 VR 端"原点增量"处理器抓取 robot_origin。
+        if self.config.use_ee_target:
+            ee_state = self.client.get_ee_state()
+            ee = ee_state.get("ee")
+            if ee is not None:
+                obs_dict["ee.x"] = float(ee[0])
+                obs_dict["ee.y"] = float(ee[1])
+                obs_dict["ee.z"] = float(ee[2])
+                obs_dict["ee.rx"] = float(ee[3])
+                obs_dict["ee.ry"] = float(ee[4])
+                obs_dict["ee.rz"] = float(ee[5])
 
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
@@ -137,6 +172,32 @@ class A10Follower(Robot):
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        if self.config.use_ee_target and "ee.target_x" in action:
+            enabled = bool(action.get("ee.enabled", False))
+            if enabled:
+                arm = [
+                    float(action.get("ee.target_x", 0.0)),
+                    float(action.get("ee.target_y", 0.0)),
+                    float(action.get("ee.target_z", 0.0)),
+                    float(action.get("ee.target_rx", 0.0)),
+                    float(action.get("ee.target_ry", 0.0)),
+                    float(action.get("ee.target_rz", 0.0)),
+                ]
+            else:
+                # 未按下 squeeze：保持上一次目标(由处理器填入 ee.target_* = last target)
+                arm = [
+                    float(action.get("ee.target_x", 0.0)),
+                    float(action.get("ee.target_y", 0.0)),
+                    float(action.get("ee.target_z", 0.0)),
+                    float(action.get("ee.target_rx", 0.0)),
+                    float(action.get("ee.target_ry", 0.0)),
+                    float(action.get("ee.target_rz", 0.0)),
+                ]
+
+            actions = arm + [float(action.get("gripper.pos", 0.0))]
+            self.client.send_ee_target(actions)
+            return action
 
         if self.config.use_ee_delta and "ee.delta_x" in action:
             enabled = bool(action.get("ee.enabled", False))

@@ -16,6 +16,10 @@ class A10FollowerConfig(RobotConfig):
     timeout_ms: int = 5000
     # When True, send_action accepts ee.delta_* and forwards SET_EE_DELTA to controller
     use_ee_delta: bool = True
+    # When True, send_action accepts ee.target_* (绝对末端目标) 并转发 SET_EE_TARGET；
+    # 同时 get_observation 会额外请求 GET_EE_STATE，把当前末端位姿 ee.x/y/z/rx/ry/rz 带进观测，
+    # 供 VR 端"原点增量"处理器在按下 squeeze 时抓取 robot_origin。与 use_ee_delta 互斥。
+    use_ee_target: bool = False
 
     # 默认相机配置，可以被命令行覆盖
     cameras: Dict[str, CameraConfig] = field(

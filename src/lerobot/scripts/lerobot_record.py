@@ -148,6 +148,10 @@ class DatasetRecordConfig:
     root: str | Path | None = None
     # Limit the frames per second.
     fps: int = 30
+    # 控制环频率(发给机器人/读 VR 的频率)。None 或等于 fps 时行为不变；
+    # 设为高于 fps(如 72)时，控制环按 control_fps 运行，但数据集仍按 fps 子采样保存，
+    # 实现"控制高频、录制低频"。要求 control_fps >= fps 且 control_fps % fps == 0 较稳。
+    control_fps: int | None = None
     # Number of seconds for data recording for each episode.
     episode_time_s: int | float = 60
     # Number of seconds for resetting the environment after each episode.
@@ -266,9 +270,20 @@ def record_loop(
     control_time_s: int | None = None,
     single_task: str | None = None,
     display_data: bool = False,
+    control_fps: int | None = None,
 ):
     if dataset is not None and dataset.fps != fps:
         raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
+
+    # 控制环频率：control_fps > fps 时，控制按 control_fps 跑，数据集按 fps 子采样。
+    eff_control_fps = int(control_fps) if control_fps else fps
+    if eff_control_fps < fps:
+        raise ValueError(
+            f"control_fps ({eff_control_fps}) 不能小于 dataset fps ({fps})；"
+            "控制环至少要和数据集一样快。"
+        )
+    save_period = 1.0 / fps  # 数据集保存周期
+    loop_period = 1.0 / eff_control_fps  # 控制环周期
 
     teleop_arm = teleop_keyboard = None
     if isinstance(teleop, list):
@@ -298,6 +313,7 @@ def record_loop(
 
     timestamp = 0
     start_episode_t = time.perf_counter()
+    last_save_t = start_episode_t
     while timestamp < control_time_s:
         start_loop_t = time.perf_counter()
 
@@ -317,7 +333,11 @@ def record_loop(
         # Applies a pipeline to the raw robot observation, default is IdentityProcessor
         obs_processed = robot_observation_processor(obs)
 
-        if policy is not None or dataset is not None:
+        # 仅在需要保存到数据集或推理时构建 dataset frame(昂贵)。
+        need_dataset_frame = policy is not None or dataset is not None
+        now_t = time.perf_counter()
+        should_save = dataset is not None and (now_t - last_save_t >= save_period - 1e-4)
+        if need_dataset_frame and (policy is not None or should_save):
             observation_frame = build_dataset_frame(dataset.features, obs_processed, prefix=OBS_STR)
 
         # Get action from either policy or teleop
@@ -371,17 +391,18 @@ def record_loop(
         # TODO(steven, pepijn, adil): we should use a pipeline step to clip the action, so the sent action is the action that we input to the robot.
         _sent_action = robot.send_action(robot_action_to_send)
 
-        # Write to dataset
-        if dataset is not None:
+        # Write to dataset (按 fps 子采样，控制环仍按 control_fps 全速跑)
+        if should_save:
             action_frame = build_dataset_frame(dataset.features, action_values, prefix=ACTION)
             frame = {**observation_frame, **action_frame, "task": single_task}
             dataset.add_frame(frame)
+            last_save_t = now_t
 
         if display_data:
             log_rerun_data(observation=obs_processed, action=action_values)
 
         dt_s = time.perf_counter() - start_loop_t
-        precise_sleep(1 / fps - dt_s)
+        precise_sleep(loop_period - dt_s)
 
         timestamp = time.perf_counter() - start_episode_t
 
@@ -525,6 +546,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 control_time_s=cfg.dataset.episode_time_s,
                 single_task=cfg.dataset.single_task,
                 display_data=cfg.display_data,
+                control_fps=cfg.dataset.control_fps,
             )
 
             # Execute a few seconds without recording to give time to manually reset the environment
@@ -544,6 +566,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     control_time_s=cfg.dataset.reset_time_s,
                     single_task=cfg.dataset.single_task,
                     display_data=cfg.display_data,
+                    control_fps=cfg.dataset.control_fps,
                 )
 
             if events["rerecord_episode"]:

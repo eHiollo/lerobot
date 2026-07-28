@@ -270,6 +270,56 @@ class A10TCPClient:
             cmd = f"SET_EE_DELTA {payload}"
             self._send_line(cmd)
 
+    def get_ee_state(self) -> dict:
+        """
+        GET_EE_STATE：返回当前末端位姿 pe=[x,y,z,rx,ry,rz] (m / rad)。
+
+        用于 VR 遥操作按下 squeeze 时抓取一次 robot_origin，配合 SET_EE_TARGET
+        实现"原点增量"闭环。若机器人端尚未更新过 EE 位姿(VR plan 未启动)，
+        返回 {"ee": None}。
+        """
+        with self.tx_lock:
+            if not self.is_connected:
+                raise ConnectionError("A10TCPBus is not connected")
+
+            self._send_line("GET_EE_STATE")
+            while True:
+                header_line = self._recvline()
+                if not header_line:
+                    raise ConnectionError("Received empty line from server")
+                if header_line.strip().startswith("{"):
+                    try:
+                        header = json.loads(header_line)
+                        break
+                    except json.JSONDecodeError:
+                        continue
+                # 忽略非 JSON 回显
+                continue
+
+            ee = header.get("ee")
+            if ee is None:
+                return {"ee": None}
+            return {"ee": np.asarray(ee, dtype=np.float64)}
+
+    def send_ee_target(self, actions: list[float]) -> None:
+        """
+        SET_EE_TARGET：发送绝对末端目标(7D [x,y,z,rx,ry,rz(rad),gripper])。
+
+        与 SET_EE_DELTA 的累加语义不同，本指令直接替换机器人内部 target_pm，
+        配合 Python 端"原点增量"实现零漂移：VR 静止时 target 不变，机器人收敛后停住。
+        """
+        if len(actions) != 7:
+            raise ValueError(f"SET_EE_TARGET expects 7 actions, got {len(actions)}")
+
+        with self.tx_lock:
+            if not self.is_connected:
+                raise ConnectionError("A10TCPBus is not connected")
+
+            payload = json.dumps({"actions": [float(v) for v in actions]})
+            cmd = f"SET_EE_TARGET {payload}"
+            self._send_line(cmd)
+
+
 
     # ---------- Feetech 风格 API：read / sync_read ----------
 
