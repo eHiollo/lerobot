@@ -385,19 +385,33 @@ class A10TCPClient:
             if not self.is_connected:
                 raise ConnectionError("A10TCPBus is not connected")
 
-            self._send_line("GET_EE_STATE")
-            while True:
-                header_line = self._recvline()
-                if not header_line:
-                    raise ConnectionError("Received empty line from server")
-                if header_line.strip().startswith("{"):
+            # 给本次读取设短超时(2s)，避免 VR plan 中途退出时 recv 长时间挂死控制环。
+            orig_timeout = self.sock.gettimeout() if self.sock is not None else None
+            if self.sock is not None:
+                try:
+                    self.sock.settimeout(2.0)
+                except OSError:
+                    pass
+            try:
+                self._send_line("GET_EE_STATE")
+                while True:
+                    header_line = self._recvline()
+                    if not header_line:
+                        raise ConnectionError("Received empty line from server")
+                    if header_line.strip().startswith("{"):
+                        try:
+                            header = json.loads(header_line)
+                            break
+                        except json.JSONDecodeError:
+                            continue
+                    # 忽略非 JSON 回显
+                    continue
+            finally:
+                if self.sock is not None and orig_timeout is not None:
                     try:
-                        header = json.loads(header_line)
-                        break
-                    except json.JSONDecodeError:
-                        continue
-                # 忽略非 JSON 回显
-                continue
+                        self.sock.settimeout(orig_timeout)
+                    except OSError:
+                        pass
 
             ee = header.get("ee")
             if ee is None:

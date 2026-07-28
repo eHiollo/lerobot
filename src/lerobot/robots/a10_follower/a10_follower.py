@@ -173,32 +173,33 @@ class A10Follower(Robot):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
+        # target 模式：动作含 ee.target_* 时必须启用 use_ee_target，否则拒绝(避免落到关节全零)。
+        if "ee.target_x" in action and not self.config.use_ee_target:
+            raise ValueError(
+                "动作含 ee.target_* 但 robot 未启用 use_ee_target；"
+                "请同时设置 --robot.use_ee_target=true 与 --teleop.use_ee_target_mode=true。"
+            )
         if self.config.use_ee_target and "ee.target_x" in action:
-            enabled = bool(action.get("ee.enabled", False))
-            if enabled:
-                arm = [
-                    float(action.get("ee.target_x", 0.0)),
-                    float(action.get("ee.target_y", 0.0)),
-                    float(action.get("ee.target_z", 0.0)),
-                    float(action.get("ee.target_rx", 0.0)),
-                    float(action.get("ee.target_ry", 0.0)),
-                    float(action.get("ee.target_rz", 0.0)),
-                ]
-            else:
-                # 未按下 squeeze：保持上一次目标(由处理器填入 ee.target_* = last target)
-                arm = [
-                    float(action.get("ee.target_x", 0.0)),
-                    float(action.get("ee.target_y", 0.0)),
-                    float(action.get("ee.target_z", 0.0)),
-                    float(action.get("ee.target_rx", 0.0)),
-                    float(action.get("ee.target_ry", 0.0)),
-                    float(action.get("ee.target_rz", 0.0)),
-                ]
+            # 未按下 squeeze：保持上一次目标(由处理器填入 ee.target_* = last target)
+            arm = [
+                float(action.get("ee.target_x", 0.0)),
+                float(action.get("ee.target_y", 0.0)),
+                float(action.get("ee.target_z", 0.0)),
+                float(action.get("ee.target_rx", 0.0)),
+                float(action.get("ee.target_ry", 0.0)),
+                float(action.get("ee.target_rz", 0.0)),
+            ]
 
             actions = arm + [float(action.get("gripper.pos", 0.0))]
             self.client.send_ee_target(actions)
             return action
 
+        # delta 模式：动作含 ee.delta_* 时必须启用 use_ee_delta，否则拒绝。
+        if "ee.delta_x" in action and not self.config.use_ee_delta:
+            raise ValueError(
+                "动作含 ee.delta_* 但 robot 未启用 use_ee_delta；"
+                "请检查 --robot.use_ee_delta=true 与 --teleop.use_ee_target_mode=false。"
+            )
         if self.config.use_ee_delta and "ee.delta_x" in action:
             enabled = bool(action.get("ee.enabled", False))
             if enabled:

@@ -8,7 +8,12 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 
 from lerobot.configs.types import FeatureType, PipelineFeatureType, PolicyFeature
-from lerobot.processor import ProcessorStepRegistry, RobotAction, RobotActionProcessorStep
+from lerobot.processor import (
+    ProcessorStepRegistry,
+    RobotAction,
+    RobotActionProcessorStep,
+    TransitionKey,
+)
 from lerobot.teleoperators.xlevr.quaternion_utils import (
     delta_position_body,
     parse_quat_xyzw,
@@ -412,13 +417,12 @@ class XLeVRTargetEEMapper(RobotActionProcessorStep):
             return (self.pos_scale * self.fine_scale_factor, self.angle_scale * self.fine_scale_factor)
         return (self.pos_scale, self.angle_scale)
 
-    def _reset_origin(self) -> None:
+    def _reset_origins(self) -> None:
+        # 仅清空"按下时建立的原点"，保留 _last_target_* 以便松开后保持上一次目标(hold)。
         self._robot_origin_pos = None
         self._robot_origin_rot = None
         self._vr_origin_pos = None
         self._vr_origin_quat = None
-        self._last_target_pos = None
-        self._last_target_rotvec = None
 
     def _ee_pose_from_obs(self, obs: dict) -> tuple[np.ndarray, R] | None:
         try:
@@ -454,7 +458,15 @@ class XLeVRTargetEEMapper(RobotActionProcessorStep):
             return rv
         return np.clip(rv, -cap, cap)
 
-    def action(self, action: RobotAction, obs: RobotAction) -> RobotAction:
+    def action(self, action: RobotAction) -> RobotAction:
+        # RobotActionProcessorStep.__call__ 只传 action；obs 需从当前 transition 取。
+        obs = None
+        trans = getattr(self, "_current_transition", None)
+        if isinstance(trans, dict):
+            obs = trans.get(TransitionKey.OBSERVATION)
+        if obs is None:
+            obs = {}
+
         action.pop("xlevr.enabled", False)
         target_position = action.pop("xlevr.target_position", None)
         orientation_quat = action.pop("xlevr.orientation_quat", None)
@@ -472,16 +484,36 @@ class XLeVRTargetEEMapper(RobotActionProcessorStep):
         control_active = (squeeze_active or fine_active) if self.require_squeeze_to_move else True
         pos_scale, angle_scale = self._motion_scales(trigger)
 
+        # 滤波上提：只要 VR 给出位姿就持续滤波，保持滤波器温热，避免按下/松开瞬间跳变。
+        curr_pos = None
+        curr_quat = None
+        if target_position is not None and orientation_quat is not None:
+            now = time.perf_counter()
+            curr_pos = np.asarray(target_position, dtype=float) * self.vr_to_robot_scale
+            curr_quat = parse_quat_xyzw(orientation_quat)
+            if self.enable_filter:
+                curr_pos = self._pos_filter.filter(curr_pos, now)
+                # 四元数逐通道滤波后再归一化(近似，足够降噪用)。
+                qf = self._quat_filter.filter(curr_quat, now)
+                n = np.linalg.norm(qf)
+                curr_quat = qf / n if n > 1e-9 else curr_quat
+
         # 未激活：保持上一次目标(机器人 hold)，夹爪仍随摇杆更新。
         if not control_active:
             if self._control_was_active:
-                self._reset_origin()
+                self._reset_origins()
             self._control_was_active = False
+            # 首次空闲且尚无 hold 目标：尝试用当前 EE 作为 hold 目标，避免发出 (0,0,0) 危险目标。
+            if self._last_target_pos is None:
+                ee = self._ee_pose_from_obs(obs)
+                if ee is not None:
+                    self._last_target_pos = ee[0].copy()
+                    self._last_target_rotvec = ee[1].as_rotvec().copy()
             return self._hold_action(gripper, trigger, thumbstick, buttons)
 
         # 激活上升沿：抓取 robot_origin(来自 obs EE)与 vr_origin。
         if not self._control_was_active:
-            self._reset_origin()
+            self._reset_origins()
             ee = self._ee_pose_from_obs(obs)
             if ee is None:
                 # 没有 EE 反馈时退化为 hold，避免乱跑。
@@ -491,27 +523,22 @@ class XLeVRTargetEEMapper(RobotActionProcessorStep):
             self._last_target_pos = self._robot_origin_pos.copy()
             self._last_target_rotvec = self._robot_origin_rot.as_rotvec().copy()
             self._control_was_active = True
-            if target_position is None or orientation_quat is None:
+            if curr_pos is None or curr_quat is None:
                 return self._hold_action(gripper, trigger, thumbstick, buttons, enabled=True)
 
-            self._vr_origin_pos = np.asarray(target_position, dtype=float) * self.vr_to_robot_scale
-            self._vr_origin_quat = parse_quat_xyzw(orientation_quat)
+            self._vr_origin_pos = curr_pos.copy()
+            self._vr_origin_quat = curr_quat.copy()
             return self._emit_target(self._robot_origin_pos, self._robot_origin_rot.as_rotvec(),
                                      gripper, trigger, thumbstick, buttons, enabled=True)
 
         # 持续激活：计算 target = robot_origin ∘ remap(vr_curr ⊖ vr_origin)。
-        if target_position is None or orientation_quat is None or self._vr_origin_pos is None:
+        if curr_pos is None or curr_quat is None:
             return self._hold_action(gripper, trigger, thumbstick, buttons, enabled=True)
 
-        now = time.perf_counter()
-        curr_pos = np.asarray(target_position, dtype=float) * self.vr_to_robot_scale
-        curr_quat = parse_quat_xyzw(orientation_quat)
-        if self.enable_filter:
-            curr_pos = self._pos_filter.filter(curr_pos, now)
-            # 四元数逐通道滤波后再归一化(近似，足够降噪用)。
-            qf = self._quat_filter.filter(curr_quat, now)
-            n = np.linalg.norm(qf)
-            curr_quat = qf / n if n > 1e-9 else curr_quat
+        # 惰性补建 vr_origin：若上升沿时 VR 位姿尚未就绪，则用当前帧补上，避免整段 hold。
+        if self._vr_origin_pos is None:
+            self._vr_origin_pos = curr_pos.copy()
+            self._vr_origin_quat = curr_quat.copy()
 
         # 位置：VR origin body frame 增量 -> remap -> robot origin body frame -> 基坐标系叠加。
         d_pos_vr_body = R.from_quat(self._vr_origin_quat).inv().apply(curr_pos - self._vr_origin_pos)

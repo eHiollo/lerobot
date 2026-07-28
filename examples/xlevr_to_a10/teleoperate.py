@@ -205,6 +205,26 @@ def main():
                 ) from exc
             print(f"已连接机器人，@ {args.fps}Hz 发送 SET_EE_DELTA actions。")
 
+    # 启动探测：target 模式必须能拿到 EE 反馈，否则 SET_EE_TARGET 会发出危险目标。
+    if robot is not None and use_ee_target:
+        try:
+            ee_probe = robot.client.get_ee_state()
+        except Exception as exc:  # noqa: BLE001
+            teleop.disconnect()
+            _safe_robot_disconnect(robot)
+            raise SystemExit(
+                f"EE 状态探测失败: {exc}\n"
+                "提示: A10 端需刷 dev/vr_dev 固件并运行 VR plan；或改用 --ee-delta。"
+            ) from exc
+        if not ee_probe or ee_probe.get("ee") is None:
+            teleop.disconnect()
+            _safe_robot_disconnect(robot)
+            raise SystemExit(
+                "机器人未返回末端位姿(GET_EE_STATE -> ee is None)。\n"
+                "提示: A10 端需刷 dev/vr_dev 固件并运行 VR plan；或改用 --ee-delta。"
+            )
+        print(f"EE 探测通过：当前末端 pe={[round(float(v), 4) for v in ee_probe['ee']]}")
+
     # 启用异步发送（独立 sender 线程 + 丢旧队列），消除偶发 TCP 抖动对控制环的卡顿。
     if robot is not None and not args.no_async_send:
         robot.client.enable_async_send(send_timeout_ms=100)
@@ -238,6 +258,19 @@ def main():
                     obs = fake_observation()
                     if args.reconnect and time.perf_counter() >= next_reconnect_at:
                         if try_robot_connect(robot, args.robot_host, args.robot_port):
+                            # target 模式重连后必须再次确认 EE 反馈可用，否则不发动作。
+                            if use_ee_target:
+                                try:
+                                    ee_probe = robot.client.get_ee_state()
+                                except Exception:
+                                    ee_probe = None
+                                if not ee_probe or ee_probe.get("ee") is None:
+                                    logging.warning(
+                                        "机器人已重连但 GET_EE_STATE 无效，target 模式暂不发送，继续等待 ..."
+                                    )
+                                    _safe_robot_disconnect(robot)
+                                    next_reconnect_at = time.perf_counter() + args.reconnect_interval
+                                    continue
                             robot_link_ok = True
                             print(f"机器人已重连 @ {args.robot_host}:{args.robot_port}")
                         else:

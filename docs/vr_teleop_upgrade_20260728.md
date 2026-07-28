@@ -155,3 +155,39 @@ python src/lerobot/scripts/lerobot_record.py \
   `get_observation` 的 GET 请求可能等待 sender 释放 `tx_lock`，但被 `SO_SNDTIMEO=100ms` 上界限制。
 - 丢帧对 `SET_EE_TARGET`（绝对目标）无害：下一帧 target 覆盖；对 `SET_EE_DELTA`（累加）
   会丢一个增量步，72Hz 下影响可忽略。
+
+## 10. 第三轮修复（安全闭环复核）
+
+上线前全局复核发现若干"首帧/松手/无 EE 反馈"边界下的安全隐患，统一修复：
+
+### 10.1 处理器 `XLeVRTargetEEMapper`（`xlevr_processor.py`）
+- **签名修正**：`RobotActionProcessorStep.__call__` 只把 `action` 传给 `action()`，原
+  `action(self, action, obs)` 签名会导致 `TypeError`。改为 `action(self, action)`，obs 从
+  `self._current_transition[TransitionKey.OBSERVATION]` 取。
+- **`_reset_origins`（原 `_reset_origin`）**：松手时只清空 `robot_origin`/`vr_origin`，**保留**
+  `_last_target_*`，使松手后机器人 hold 在上一次目标，而非回退到 (0,0,0)。
+- **首帧空闲 hold**：未按下且 `_last_target_pos is None` 时，用 `obs` 的当前 EE 作为 hold 目标，
+  避免首帧发出基坐标系原点 (0,0,0) 的危险目标。
+- **滤波上提**：只要 VR 给出位姿就持续滤波（不再只在激活时滤波），保持滤波器温热，消除
+  按下/松开瞬间的跳变；`vr_origin` 也用滤波后的位姿建立。
+- **惰性 `vr_origin`**：若上升沿时 VR 位姿尚未就绪，在持续激活分支用当前帧补建 `vr_origin`，
+  避免整段 hold。
+
+### 10.2 `a10_follower.send_action` 配置一致性守卫
+- 动作含 `ee.target_*` 但 `use_ee_target=False`（或含 `ee.delta_*` 但 `use_ee_delta=False`）时
+  **抛 `ValueError`**，避免错配时落到关节全零指令（机器人冲向零位）。
+
+### 10.3 `teleoperate.py` 启动探测 + 重连探测
+- target 模式连接成功后先 `get_ee_state()`，若 `ee is None` → `SystemExit` 并提示刷固件或改用
+  `--ee-delta`，从源头杜绝无 EE 反馈时发危险目标。
+- 重连成功后同样探测；未通过则不置 `robot_link_ok`，继续等待，避免重连到无 EE 固件仍发动作。
+
+### 10.4 `a10_client.get_ee_state` 读取超时
+- 原复用连接时 300s 超时，VR plan 中途退出会让控制环挂死 5 分钟。改为本次读取临时设 2s 超时，
+  `finally` 恢复原值；超时被 `ROBOT_LINK_ERRORS` 捕获 → 触发重连。
+
+### 10.5 安全性结论
+- VR plan 运行时：obs EE 恒有效 → `_last_target` 首帧即由 EE 填充 → 永不发出 (0,0,0)。
+- VR plan 未运行时：`SET_EE_TARGET` 无消费者（仅 VR plan 消费），即便发出也无效，无害。
+- 错配（target 动作 + delta 配置）：`send_action` 直接报错，不发送。
+
