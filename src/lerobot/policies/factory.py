@@ -95,6 +95,10 @@ def get_policy_class(name: str) -> type[PreTrainedPolicy]:
         from lerobot.policies.sac.modeling_sac import SACPolicy
 
         return SACPolicy
+    elif name == "residual_sac":
+        from lerobot.policies.residual_sac.modeling_residual_sac import ResidualSACPolicy
+
+        return ResidualSACPolicy
     elif name == "reward_classifier":
         from lerobot.policies.sac.reward_model.modeling_classifier import Classifier
 

@@ -128,6 +128,24 @@ Learner (5090): SAC 残差头更新 + ReplayBuffer
 - **设计决策**:XLeVR 输出 EE delta,但 A10 残差 RL 动作空间是 7D 关节。干预时动作覆盖逻辑放 Phase 4 actor 接线阶段实现(干预时 actor 直接把 XLeVR EE delta 送 `SET_EE_DELTA`,并记录回读关节位置作为 buffer 中的 action),不在 processor 层做 IK 转换
 - **待真机验证**:π0.5 闭环,人按 VR squeeze 能接管
 
+### Phase 3 — 残差策略推理路径完成,训练集成留 Phase 4
+- 新建 `src/lerobot/policies/residual_sac/`:
+  - `ResidualSACConfig`:继承 `SACConfig` 复用全部 SAC 超参,新增 π0.5 连接 + α 残差缩放 + 关节限位
+  - `ResidualSACPolicy`:继承 `SACPolicy`,覆盖 `select_action`(叠加 a_vla + α·Δa)与 `reset`(清 chunk buffer)
+  - `_ChunkBuffer`:内联 chunk 逐步释放(不依赖 openpi `tree`)
+  - `init_base_client()`:actor 启动时连 π0.5 websocket 服务
+- 在 `policies/factory.py` 注册 `residual_sac`
+- 单测 `tests/policies/test_residual_sac_policy.py` 通过:
+  - 归一化(绝对关节→[-1,1])✅
+  - 退化模式 select_action(a_vla=0,combined=α·Δa∈[-0.1,0.1])✅
+  - reset ✅
+- **Phase 4 TODO(训练集成)**:
+  - `forward()` actor loss 改为最大化 `Q(s, a_vla_norm + α·Δa)`,a_vla detach
+  - learner.py 需在 batch 中携带 `a_vla_norm`(从 transition 的 complementary_data 取)
+  - critic loss 不变(buffer 存 combined action)
+  - actor.py 接线:每步调 `policy.init_base_client()` + `select_action(batch, base_obs)`
+- **待真机验证**:π0.5 服务在环时 select_action 返回合理 combined action
+
 ## 六、进度记录
 
 ### Phase 0 — 代码完成,待真机验证
