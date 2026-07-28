@@ -63,7 +63,6 @@
     "teleop": {
       "type": "xlevr",
       "xlevr_path": "/home/allen/Allen/XLeRobot/XLeVR",
-      "use_ee_target_mode": false,
       "enable_left_events": true
     },
     "processor": {
@@ -87,7 +86,6 @@
   },
   "dataset": {
     "repo_id": "allen/a10_reach_residual",
-    "task": "reach_yellow_lemon",
     "root": "data/a10_reach_residual"
   },
   "output_dir": "outputs/residual_pi05_a10",

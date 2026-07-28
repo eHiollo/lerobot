@@ -197,3 +197,40 @@ python -m lerobot.rl.actor --config_path src/lerobot/configs/train_config_residu
   2. `python examples/dev_hil/phase0_pi05_openloop.py --policy-host <GPU_IP> --policy-port 8000 --robot-host 192.168.1.12 --robot-port 8080 --steps 50 --hz 10`
 - **验收标准**:超时比例 <10%,动作合理,无掉帧
 
+## 七、代码审查记录 (2026-07-28)
+
+对 Phase 0–3 全部新增/修改代码做了端到端复查,发现并修复以下问题:
+
+### 已修复
+1. **[关键] 入口未注册 a10_follower / xlevr / residual_sac**
+   - `learner.py` / `actor.py` 仅显式 import `so100_follower`、`gamepad`、`so101_leader`,导致 draccus 解析 JSON 配置时 `RobotConfig` / `TeleoperatorConfig` / `PreTrainedConfig` 的 ChoiceRegistry 找不到 `a10_follower` / `xlevr` / `residual_sac`,训练启动即 `DecodingError`。
+   - 修复:在 `learner.py` 与 `actor.py` 增加 `from lerobot.robots import a10_follower`、`from lerobot.teleoperators import xlevr`、`import lerobot.policies.residual_sac`(均 `# noqa: F401`)。
+   - 已用 `draccus.parse(TrainRLServerPipelineConfig, ...)` 端到端验证 JSON 配置可成功加载。
+
+2. **[中] phase0 脚本 `cameras=None` 覆盖默认相机**
+   - `A10FollowerConfig(cameras=cam if cam is not None else None)` 在无 `--camera-index` 时显式传 `cameras=None`,覆盖 dataclass 的 `default_factory`,导致无相机 → π0.5 拿到全黑图。
+   - 修复:改为仅在 `cam is not None` 时注入 `cameras` kwarg,否则保留默认。
+
+3. **[中] phase0 `--dry-run` 路径未连机器人但调 `get_observation`**
+   - dry-run 不 `robot.connect()`,随后 `_build_observation(robot, ...)` 调 `get_observation()` 会因未连接抛 `DeviceNotConnectedError`。
+   - 修复:新增 `_build_mock_observation(prompt)`(全零 obs),dry-run 时改用它,真正实现"不连机器人只验证推理服务 + obs 构建"。
+
+4. **[中] 训练配置 JSON 字段不合法**
+   - `dataset.task` 不是 `DatasetConfig` 字段;`teleop.use_ee_target_mode` 不是 `XLeVRTeleopConfig` 字段。
+   - 修复:删除这两个无效字段。
+
+### 复查通过项(无问题)
+- `ResidualSACPolicy.select_action` 与 SAC 原版 actor 调用签名一致(`self.actor(batch, observations_features)` 返回 3 元组)。
+- `A10RobotEnv` 关节名取自 `robot.joint_names`(`joint_1..6, gripper`),与 `send_action` 关节分支一致;`use_ee_delta` 真假均不影响关节分支(无 `ee.delta_*` key 时走关节目标分支)。
+- OpenCVCamera `async_read` 返回 numpy HWC,与 `_to_policy_chw` / `observation_space` 构建一致。
+- π0.5 `A10Inputs` 接受 CHW(内部 `_parse_image` 转 HWC),与 phase0 输出 CHW 对齐;`prompt` 字段被正确读取。
+- `make_a10_processors` 全部分支(含 image_preprocessing / reset / reward_classifier)构建通过。
+- `ResidualSACConfig` 继承 `SACConfig` 后 `shared_encoder` / `vision_encoder_name` / `utd_ratio` 等字段齐全,`factory.get_policy_class("residual_sac")` 正常返回。
+- 全部新增单测(7 项)通过;`py_compile` 全部修改文件通过。
+
+### 待后续处理(非阻塞)
+- `A10RobotEnv` 的 `joint_lower/upper` 当前用默认值,未从 policy 配置同步;A10 默认限位正确,真机标定后若改限位需手动同步到 env 构造。
+- phase0 同步推理(无 async 双缓冲),每 10 步一次推理计入 10Hz 预算,Phase 0 专门测此超时比例;生产化在 Phase 4 评估是否需要双缓冲。
+- `ResidualSACPolicy.select_action(batch)` 不传 `base_obs` 时静默退化为纯 SAC(无 π0.5);Phase 4 actor 接线时必须传 `base_obs` 并在缺失时告警。
+
+
