@@ -130,3 +130,32 @@ python -m lerobot.rl.actor --config_path src/lerobot/configs/train_config_residu
 # 注意: actor 需 XLeVR 已连 (VR 头显就绪); learner/actor 必须用同一份 config
 # 监控: wandb 显示 reward 上升 + intervention rate 下降
 
+
+#==================== dev/async-ttc: AsyncVLA 真机批量采样 (TTC M1) ====================
+# 分支: openpi + A10_new 都切 dev/async-ttc (A10_new 是 openpi submodule, 主仓已锁指针)
+# 启动顺序同 dev/hil: π0.5 服务 → A10 真机 → 桥接
+# 注意: batch=N 首轮推理触发 jit 重编译, 先空跑几轮预热再计时
+
+#-------- 1. π0.5 推理服务 (同 dev/hil 第 1 步, openpi 切 dev/async-ttc) ----------
+cd $HOME/Allen/openpi && git checkout dev/async-ttc && git submodule update
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.5 \
+ HF_LEROBOT_HOME=$HOME/Allen/openpi HF_DATASETS_OFFLINE=1 HF_HUB_OFFLINE=1 \
+ uv run scripts/serve_policy.py policy:checkpoint \
+  --policy.config=pi05_a10_finetune \
+  --policy.dir=checkpoints/pi05_a10_finetune/Reach_5_9_1/130000
+
+#-------- 2. A10 真机 (同 dev/hil 第 2 步) ----------
+
+#-------- 3. 桥接 (openpi/third_party/A10_new/client, 机器人 PC) ----------
+cd $HOME/Allen/openpi/third_party/A10_new/client
+# B2 批量采样: 每次推理 4 候选 + L1 medoid 选优 (AsyncVLA 主路径)
+python3 run_bridge.py \
+  --policy-host <GPU_IP> --policy-port 8000 \
+  --robot-host 127.0.0.1 --robot-port 8080 \
+  --mode async --camera-mode threaded \
+  --sample-n 4 --hz 10
+# B1 对照: --sample-n 1 (原单次采样行为, 逐字节兼容)
+# 调夹爪权重: --verifier-gripper-weight 0.03 (默认)
+# 验收: bridge 日志每 20 轮打 verifier N=4/divergence; N 显示 1 则说明服务端未生效
+# pilot: Pick-and-Place B1 vs B2 各 20 trials, 记成功率 + divergence 日志
+
