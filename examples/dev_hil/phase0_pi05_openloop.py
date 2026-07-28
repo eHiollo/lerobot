@@ -62,6 +62,7 @@ class ChunkBuffer:
         self._horizon = action_horizon
         self._chunk: np.ndarray | None = None
         self._step = 0
+        self.infer_count = 0  # 真实网络推理次数 (调试/统计用)
 
     def reset(self) -> None:
         self._chunk = None
@@ -71,6 +72,7 @@ class ChunkBuffer:
         """返回当前步的 action dict (含 'actions' (7,));必要时先重新推理。"""
         if self._chunk is None:
             result = self._client.infer(obs)
+            self.infer_count += 1
             actions = np.asarray(result["actions"], dtype=np.float32)
             if actions.ndim == 1:
                 actions = actions[None, :]
@@ -160,13 +162,27 @@ def _build_observation(robot: A10Follower, prompt: str) -> dict:
     }
 
 
+# A10 安全关节限位 (degree, gripper mm);π0.5 输出超此范围会被 clip,保护真机。
+SAFE_JOINT_LOWER = np.array([-170, -90, -90, -90, -90, -170, 0.0], dtype=np.float32)
+SAFE_JOINT_UPPER = np.array([170, 90, 90, 90, 90, 170, 100.0], dtype=np.float32)
+
+
 def _action_to_robot_dict(action_7d: np.ndarray, joint_names: list[str]) -> dict:
-    """π0.5 输出 7D [joint_1..joint_6, gripper_abs] → A10Follower joint 模式 dict。"""
+    """π0.5 输出 7D [joint_1..joint_6, gripper_abs] → A10Follower joint 模式 dict。
+
+    安全 clip 到 A10 关节限位,防止 π0.5 因分布偏移输出超限关节损坏真机。
+    """
     a = np.asarray(action_7d, dtype=np.float32).reshape(-1)
+    lo = SAFE_JOINT_LOWER[: len(a)]
+    hi = SAFE_JOINT_UPPER[: len(a)]
+    clipped = np.clip(a, lo, hi)
+    n_clipped = int(np.sum((a < lo) | (a > hi)))
+    if n_clipped > 0:
+        logger.warning("π0.5 输出有 %d 维超限,已 clip 到安全范围。", n_clipped)
     out = {}
     for i, name in enumerate(joint_names):
-        if i < len(a):
-            out[f"{name}.pos"] = float(a[i])
+        if i < len(clipped):
+            out[f"{name}.pos"] = float(clipped[i])
     return out
 
 
@@ -219,7 +235,6 @@ def main() -> None:
         logger.info("A10 已连接,关节=%s", robot.joint_names)
 
     dt = 1.0 / args.hz
-    infer_count = 0
     step_count = 0
     over_budget = 0  # 超时次数
 
@@ -234,7 +249,6 @@ def main() -> None:
             t_infer = time.perf_counter()
             result = broker.infer(obs)
             infer_ms = (time.perf_counter() - t_infer) * 1e3
-            infer_count += 1
 
             action = result["actions"]  # (7,) 当前步
             action_dict = _action_to_robot_dict(action, robot.joint_names)
@@ -266,8 +280,8 @@ def main() -> None:
         client.close()
 
     logger.info(
-        "完成: steps=%d infer_calls=%d 超时次数=%d (%.1f%%)",
-        step_count, infer_count, over_budget,
+        "完成: steps=%d 真实推理次数=%d 超时次数=%d (%.1f%%)",
+        step_count, broker.infer_count, over_budget,
         100.0 * over_budget / max(1, step_count),
     )
     if over_budget / max(1, step_count) > 0.1:
