@@ -307,6 +307,11 @@ def make_robot_env(cfg: HILSerlRobotEnvConfig) -> tuple[gym.Env, Any]:
     Returns:
         Tuple of (gym environment, teleoperator device).
     """
+    # A10 关节空间路径 (不依赖 robot.bus,与 SO100 路径并列)
+    if cfg.robot is not None and getattr(cfg.robot, "type", None) == "a10_follower":
+        from lerobot.rl.gym_manipulator_a10 import make_a10_robot_env
+        return make_a10_robot_env(cfg)
+
     # Check if this is a GymHIL simulation environment
     if cfg.name == "gym_hil":
         assert cfg.robot is None and cfg.teleop is None, "GymHIL environment does not support robot or teleop"
@@ -367,6 +372,10 @@ def make_processors(
     Returns:
         Tuple of (environment processor, action processor).
     """
+    # A10 关节空间路径 (无 IK 链,与 SO100 路径并列)
+    if cfg.robot is not None and getattr(cfg.robot, "type", None) == "a10_follower":
+        from lerobot.rl.gym_manipulator_a10 import make_a10_processors
+        return make_a10_processors(env, teleop_device, cfg, device)
     terminate_on_success = (
         cfg.processor.reset.terminate_on_success if cfg.processor.reset is not None else True
     )

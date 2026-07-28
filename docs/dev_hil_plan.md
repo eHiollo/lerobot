@@ -109,6 +109,15 @@ Learner (5090): SAC 残差头更新 + ReplayBuffer
 | 任务太难 | 先在 Reach 任务跑通,再迁移抓取 |
 | 真机炸机 | 关节限位 clamp;reset_pose 安全姿态;e-stop |
 
+### Phase 1 — 代码完成,待真机验证
+- 新建 `src/lerobot/rl/gym_manipulator_a10.py`:`A10RobotEnv`(关节空间,不依赖 `robot.bus`)
+- 动作 7D [-1,1] 归一化 → env 内反归一化为绝对关节送 `SET_JOINTS`
+- `make_a10_robot_env` / `make_a10_processors`(最小管线,无 IK)
+- `gym_manipulator.py` 加 A10 分发(`make_robot_env`/`make_processors` 按 `robot.type` 路由,不破坏 SO100)
+- 单测 `tests/rl/test_a10_robot_env.py` 通过(mock 机器人)
+- **待真机验证**:env 连真机 reset/step 100 步稳定;π0.5 闭环跑通一个 episode
+- **Phase 2 TODO**:`make_a10_processors` 的 action_steps 为空,需补 `JointInterventionProcessorStep`(干预时用 teleop_action 覆盖 7D 关节动作)
+
 ## 六、进度记录
 
 ### Phase 0 — 代码完成,待真机验证
