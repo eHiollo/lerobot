@@ -118,6 +118,16 @@ Learner (5090): SAC 残差头更新 + ReplayBuffer
 - **待真机验证**:env 连真机 reset/step 100 步稳定;π0.5 闭环跑通一个 episode
 - **Phase 2 TODO**:`make_a10_processors` 的 action_steps 为空,需补 `JointInterventionProcessorStep`(干预时用 teleop_action 覆盖 7D 关节动作)
 
+### Phase 2 — 事件适配完成,干预动作覆盖留 Phase 4
+- `XLeVRTeleop` 新增 `get_teleop_events()`,映射 HIL-SERL 事件:
+  - `IS_INTERVENTION` = 右手 squeeze 激活
+  - `SUCCESS` = grip 按钮按下
+  - `TERMINATE_EPISODE` = 左手摇杆右 (exit_early)
+  - `RERECORD_EPISODE` = 左手摇杆左
+- 单测 `tests/rl/test_xlevr_events.py` 通过
+- **设计决策**:XLeVR 输出 EE delta,但 A10 残差 RL 动作空间是 7D 关节。干预时动作覆盖逻辑放 Phase 4 actor 接线阶段实现(干预时 actor 直接把 XLeVR EE delta 送 `SET_EE_DELTA`,并记录回读关节位置作为 buffer 中的 action),不在 processor 层做 IK 转换
+- **待真机验证**:π0.5 闭环,人按 VR squeeze 能接管
+
 ## 六、进度记录
 
 ### Phase 0 — 代码完成,待真机验证

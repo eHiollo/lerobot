@@ -203,6 +203,32 @@ class XLeVRTeleop(Teleoperator):
             self._vr_event_handler.reset_events()
         return events
 
+    def get_teleop_events(self) -> dict[str, Any]:
+        """HIL-SERL 干预事件 (供 InterventionActionProcessorStep 使用)。
+
+        映射:
+          IS_INTERVENTION   = 右手 squeeze 激活 (人正在接管)
+          SUCCESS           = grip 按钮按下 (标记任务成功)
+          TERMINATE_EPISODE = 左手摇杆右 (exit_early)
+          RERECORD_EPISODE  = 左手摇杆左 (rerecord)
+        """
+        from lerobot.teleoperators.utils import TeleopEvents
+
+        action = self.get_action()
+        vr_events = self.get_vr_events() if self._vr_event_handler is not None else {}
+
+        is_intervention = bool(action.get("xlevr.enabled", False))
+        success = bool(action.get("xlevr.grip_active", False))
+        terminate = bool(vr_events.get("exit_early", False))
+        rerecord = bool(vr_events.get("rerecord_episode", False))
+
+        return {
+            TeleopEvents.IS_INTERVENTION: is_intervention,
+            TeleopEvents.SUCCESS: success,
+            TeleopEvents.TERMINATE_EPISODE: terminate,
+            TeleopEvents.RERECORD_EPISODE: rerecord,
+        }
+
     def _idle_action(self, enabled: bool = False) -> dict[str, Any]:
         return {
             "xlevr.enabled": enabled,
