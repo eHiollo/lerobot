@@ -57,7 +57,35 @@
 4. **critic 数据格式是约定而非联调结果**：HIL 介入事件（dev/hil `get_teleop_events`）落地后需对齐字段。
 5. **BibTeX 条目信息未核实**：投稿前必须 Scholar 逐条核对。
 
-## 三、commit 时间线（dev/async-ttc）
+## 三、第二轮：critic 数据管线 + bridge 集成（G1/G2/G3）
+
+### G1. 合成偏好对生成脚本（lerobot，本次）
+
+- `generate_synthetic_pairs.py`：直读 parquet（`LeRobotDataset` 版本检查拒绝旧格式数据集，绕过），锚 chunk 取 `state[t:t+T]` 绝对关节序列。
+- **重要发现（数据集）**：`dataset_5_9` 的 parquet `action` 列是**常量**（逐维 std=0，采集侧未写入真实 action）；openpi 训练以 `use_state_as_action_targets=True` 从 `observation.state` 构造动作目标，故本脚本同约定。后续新采数据集若 action 列正常，注意语义对齐。
+- **分维噪声**：`make_synthetic_pair` 加 `dim_noise_scale`——关节 rad 尺度 (0.02/0.2) 与夹爪 mm 尺度差 100 倍，不加缩放则夹爪扰动无意义。
+- 动作空间对齐：bridge 端 candidates 经 `AbsoluteActions` 输出变换后为**绝对关节空间**，合成对同样在绝对空间构造（训练时模型学的是 delta，critic 看到的是绝对，两者不冲突——critic 是独立模块）。
+
+### G2. 端到端训练验证（本次）
+
+- `dataset_5_9`（30 episodes, Reach）→ `--stride 2 --pairs-per-step 3` → **7524 对**。
+- `train_relative_critic` 默认 config 跑满 20k steps（CPU 38s），**best_val_acc=1.000**。合成对近/远扰动可分性极强，满分属预期——只证明管线正确，不代表真实候选判别力（需 HIL 标注数据）。
+
+### G3. bridge 双 verifier 集成（A10_new，本次）
+
+- `verifier.py`：拆出 `pairwise_dist_matrix` / `compute_divergence` 独立函数。
+- 新增 `critic_verifier.py`：**自包含网络定义**（`_build_net` 按 checkpoint config 重建，state_dict 键名与 lerobot 侧兼容，E2E load 验证通过）——bridge 不依赖 lerobot 包，仅需 torch（lazy import，未装时报错提示回退 medoid）。
+- bridge `--verifier medoid|critic` + `--critic-checkpoint` + `--critic-device`（默认 cpu）。
+- **设计决策（divergence 口径统一）**：critic 无天然分歧度，adaptive N 与日志的 divergence **始终用几何口径**（两实现可比）；critic 的锦标赛胜场数存日志 `per_cand_score` 字段（原 `per_cand_mean` 改名，含义随 `verifier` 字段切换）。
+- 验证：mock 硬件行为级测试——medoid 路径 sample_n 透传、critic 路径选中近专家候选、缺 checkpoint/未知 verifier 两个 guard 报错；critic E2E（真 checkpoint）：噪声越大胜场越少（wins=[3,2,1,0]），单调性正确；verifier 7 项 pytest 重构后全过。
+
+### 需要后期 check 的点（第二轮新增）
+
+6. **机器人 PC 装 torch**：critic 模式需 `pip install torch`（CPU 版即可，MLP 推理 ms 级）；未装时 medoid 不受影响。
+7. **Reach 数据夹爪恒 0**：`dataset_5_9` 全程夹爪不动（state 第 7 维 std=0），critic 的夹爪判别力为零——Pick-and-Place 数据（含夹爪变化）训练后才有意义；pilot 前用新任务数据重训。
+8. **critic 合成对只编码「接近专家=好」先验**：真实候选间的细粒度优劣（如同等接近但碰撞风险不同）需 HIL Stage-2 数据；M4 联调时先用合成 critic 跑通全链路再替换。
+
+## 四、commit 时间线（dev/async-ttc）
 
 | 仓库 | 提交 | 内容 |
 |------|------|------|
@@ -67,4 +95,8 @@
 | openpi | `2dd942b` | S: submodule 指针跟进 |
 | lerobot | `27d606d` | C: relative critic 框架 |
 | lerobot | `8f38923` | E: related work 库 |
-| lerobot | (本次) | P: 本过程文档 |
+| lerobot | (第一轮) | P: 过程文档 |
+| lerobot | (本次) | G1: 合成对生成脚本 + 分维噪声 |
+| A10_new | (本次) | G3: bridge 双 verifier 集成 + divergence 拆解 |
+| openpi | (本次) | S2: submodule 指针跟进 |
+| lerobot | (本次) | G4: CLI.txt critic 用法 + 过程文档更新 |

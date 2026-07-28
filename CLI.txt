@@ -159,3 +159,16 @@ python3 run_bridge.py \
 # 验收: bridge 日志每 20 轮打 verifier N=4/divergence; N 显示 1 则说明服务端未生效
 # pilot: Pick-and-Place B1 vs B2 各 20 trials, 记成功率 + divergence 日志
 
+#-------- 4. L2 critic 训练 (lerobot 仓库, GPU/CPU 均可) ----------
+conda activate lerobot && cd $HOME/Allen/lerobot
+# 4a. 从数据集生成合成偏好对 (冷启动; 直读 parquet, 锚=未来 state 序列)
+python -m lerobot.policies.relative_critic.generate_synthetic_pairs \
+  --data-dir $HOME/Allen/openpi/dataset/dataset_5_9 \
+  --output rac_data/pairs_5_9.jsonl --stride 2 --pairs-per-step 3
+# 4b. 训练 (MLP 很小, 20k steps CPU ~40s; best.pt 按 val_acc 保存)
+python -m lerobot.policies.relative_critic.train_relative_critic \
+  --data rac_data/pairs_5_9.jsonl --output rac_ckpt/reach_5_9
+# 4c. 桥接切 critic verifier (机器人 PC 需 pip install torch CPU 版):
+#   python3 run_bridge.py ... --sample-n 4 --verifier critic --critic-checkpoint rac_ckpt/reach_5_9/best.pt
+# 注意: critic 模式 divergence 仍用几何口径 (驱动 adaptive N); 日志 per_cand_score=锦标赛胜场
+
