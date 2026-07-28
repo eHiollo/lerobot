@@ -235,19 +235,20 @@ python -m lerobot.rl.actor --config_path src/lerobot/configs/train_config_residu
 - `select_action` 中 `a_vla` 对 batch>1 共享同一 chunk step(单 env 真机正确,向量化 eval 不适用)。
 - **Phase 4 关键**:`base_obs` 的图像需 224² CHW(π0.5),而 SAC `batch` 的图像是 128²(processor 缩放);actor 必须为 π0.5 单独构建 `base_obs`,不能复用 SAC 处理后的图像。
 
-## 八、第二轮深度审查 (2026-07-28)
+## 八、第二轮审查 (2026-07-28)
 
-针对逻辑漏洞 / 安全 / 优化再做一遍,修复:
+经用户反馈:main 分支已能跑通真机采集/训练/推理/部署,A10 服务端本身做关节限位 clamp,无需在客户端再叠防御层。故回退第二轮加的冗余安全代码(phase0 动作 clip、A10RobotEnv.step clip、reset_pose 校验、`_normalize_action` 除零守卫),保持与能跑通的原始行为一致。
 
-1. **[安全] phase0 无动作 clipping** — π0.5 因分布偏移可能输出超限关节,直接送真机有损坏风险。`_action_to_robot_dict` 增加 `SAFE_JOINT_LOWER/UPPER` clip,超限时告警。
-2. **[安全] A10RobotEnv.step 无 action clip** — `Box(-1,1)` 不强制,非 clamped 策略可能送超限反归一化关节。step 入口加 `np.clip(action, -1, 1)`。
-3. **[安全] `_normalize_action` 除零** — 关节上下限相等时 `(upper-lower)=0` → NaN → 送真机。加 `torch.where(span==0, 1, span)` 保护。
-4. **[安全] reset_pose 无校验** — 配置错误可能送超限复位位。`__init__` 加 reset_pose ∈ [lower, upper] 断言。
-5. **[日志] phase0 `infer_count` 误导** — 原本每步 +1(= step 数),非真实推理次数。改为 `ChunkBuffer.infer_count` 记录真实网络推理次数。
+仅保留一项真实日志修正:
+- **[日志] phase0 `infer_count` 误导** — 原本每步 +1(= step 数),非真实推理次数。改为 `ChunkBuffer.infer_count` 记录真实网络推理次数,Phase 0 验证时可确认 chunking 把 50 步的推理降到 ~5 次。
 
-### 优化点(未改,记录备查)
-- phase0 每步读相机即使 chunk 未耗尽(浪费 9/10 次相机读);Phase 0 故意保留以测最坏耗时,生产化可只在 chunk 耗尽时读。
-- `ResidualSACPolicy._joint_lower/upper` 每次调用 `.to(device)` 创建新 tensor;可注册为 `register_buffer` 提效(微优化,真机单 env 无感)。
+### 待后续处理(非阻塞)
+- `A10RobotEnv` 的 `joint_lower/upper` 当前用默认值,未从 policy 配置同步;A10 默认限位正确,真机标定后若改限位需手动同步到 env 构造。
+- phase0 同步推理(无 async 双缓冲),每 10 步一次推理计入 10Hz 预算,Phase 0 专门测此超时比例;生产化在 Phase 4 评估是否需要双缓冲。
+- `ResidualSACPolicy.select_action(batch)` 不传 `base_obs` 时静默退化为纯 SAC(无 π0.5);Phase 4 actor 接线时必须传 `base_obs` 并在缺失时告警。
+- `select_action` 中 `a_vla` 对 batch>1 共享同一 chunk step(单 env 真机正确,向量化 eval 不适用)。
+- **Phase 4 关键**:`base_obs` 的图像需 224² CHW(π0.5),而 SAC `batch` 的图像是 128²(processor 缩放);actor 必须为 π0.5 单独构建 `base_obs`,不能复用 SAC 处理后的图像。
+
 
 
 

@@ -126,10 +126,7 @@ class ResidualSACPolicy(SACPolicy):
         """绝对关节 -> [-1,1]。a: (..., 7)"""
         lower = self._joint_lower.to(a.device)
         upper = self._joint_upper.to(a.device)
-        span = upper - lower
-        # 防除零:某关节上下限相等时 span=0 → 归一化结果为 0 (中点)
-        span = torch.where(span == 0, torch.ones_like(span), span)
-        return 2.0 * (a - lower) / span - 1.0
+        return 2.0 * (a - lower) / (upper - lower) - 1.0
 
     # --- 推理 ---
 

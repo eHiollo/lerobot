@@ -60,13 +60,6 @@ class A10RobotEnv(gym.Env):
 
         self.reset_pose = np.asarray(reset_pose, dtype=np.float32) if reset_pose is not None else None
         self.reset_time_s = reset_time_s
-        if self.reset_pose is not None:
-            assert self.reset_pose.shape == (7,), f"reset_pose shape {self.reset_pose.shape} != (7,)"
-            if np.any(self.reset_pose < self.joint_lower) or np.any(self.reset_pose > self.joint_upper):
-                raise ValueError(
-                    f"reset_pose {self.reset_pose.tolist()} 超出关节限位 "
-                    f"[{self.joint_lower.tolist()}, {self.joint_upper.tolist()}]"
-                )
         self.current_step = 0
         self._raw_joint_positions: dict[str, float] | None = None
         self._setup_spaces()
@@ -112,8 +105,6 @@ class A10RobotEnv(gym.Env):
     def step(self, action) -> tuple[dict, float, bool, bool, dict]:
         action = np.asarray(action, dtype=np.float32).reshape(-1)
         assert action.shape == (7,), f"action shape {action.shape} != (7,)"
-        # 防御性 clip:确保归一化动作在 [-1,1],反归一化后才不会超出关节限位
-        action = np.clip(action, -1.0, 1.0)
         abs_joints = _denormalize(action, self.joint_lower, self.joint_upper)
         self.robot.send_action({f"{n}.pos": float(v) for n, v in zip(self._joint_names, abs_joints)})
         obs = self._get_observation()

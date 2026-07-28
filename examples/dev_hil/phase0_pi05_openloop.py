@@ -162,27 +162,13 @@ def _build_observation(robot: A10Follower, prompt: str) -> dict:
     }
 
 
-# A10 安全关节限位 (degree, gripper mm);π0.5 输出超此范围会被 clip,保护真机。
-SAFE_JOINT_LOWER = np.array([-170, -90, -90, -90, -90, -170, 0.0], dtype=np.float32)
-SAFE_JOINT_UPPER = np.array([170, 90, 90, 90, 90, 170, 100.0], dtype=np.float32)
-
-
 def _action_to_robot_dict(action_7d: np.ndarray, joint_names: list[str]) -> dict:
-    """π0.5 输出 7D [joint_1..joint_6, gripper_abs] → A10Follower joint 模式 dict。
-
-    安全 clip 到 A10 关节限位,防止 π0.5 因分布偏移输出超限关节损坏真机。
-    """
+    """π0.5 输出 7D [joint_1..joint_6, gripper_abs] → A10Follower joint 模式 dict。"""
     a = np.asarray(action_7d, dtype=np.float32).reshape(-1)
-    lo = SAFE_JOINT_LOWER[: len(a)]
-    hi = SAFE_JOINT_UPPER[: len(a)]
-    clipped = np.clip(a, lo, hi)
-    n_clipped = int(np.sum((a < lo) | (a > hi)))
-    if n_clipped > 0:
-        logger.warning("π0.5 输出有 %d 维超限,已 clip 到安全范围。", n_clipped)
     out = {}
     for i, name in enumerate(joint_names):
-        if i < len(clipped):
-            out[f"{name}.pos"] = float(clipped[i])
+        if i < len(a):
+            out[f"{name}.pos"] = float(a[i])
     return out
 
 
