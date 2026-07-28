@@ -61,6 +61,12 @@ def parse_args():
         help="强制使用帧间增量(SET_EE_DELTA)模式，覆盖 --ee-target。",
     )
     parser.add_argument(
+        "--no-async-send",
+        action="store_true",
+        help="关闭 send_action 异步发送（默认开启：独立 sender 线程 + 丢旧队列，"
+             "避免偶发 TCP 抖动卡住控制环）。",
+    )
+    parser.add_argument(
         "--with-cameras",
         action="store_true",
         help="启用 config 里的 OpenCV 相机（默认不启，仅 TCP 发 actions）",
@@ -198,6 +204,11 @@ def main():
                     "或去掉 --no-reconnect 以自动等待重连；仅测 VR 可加 --vr-only。"
                 ) from exc
             print(f"已连接机器人，@ {args.fps}Hz 发送 SET_EE_DELTA actions。")
+
+    # 启用异步发送（独立 sender 线程 + 丢旧队列），消除偶发 TCP 抖动对控制环的卡顿。
+    if robot is not None and not args.no_async_send:
+        robot.client.enable_async_send(send_timeout_ms=100)
+        print("已启用异步发送（sender 线程 + TCP_NODELAY + SO_SNDTIMEO=100ms）。")
 
     print("XLeVR 遥操作运行中，Ctrl+C 停止。")
     mode_str = "原点增量绝对目标(SET_EE_TARGET, 零漂移)" if use_ee_target else "帧间增量(SET_EE_DELTA, 累加)"

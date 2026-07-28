@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import socket
+import struct
 import threading
+from collections import deque
 from typing import Dict, Iterable, List
 
 import cv2
@@ -59,10 +61,18 @@ class A10TCPClient:
             self.sock: socket.socket | None = None
             self._last_q: np.ndarray | None = None
             self._buffer = b""
-            
+
             # 事务锁，防止多线程（Leader/Follower）同时读写 socket 导致数据混乱
             self.tx_lock = threading.Lock()
-            
+
+            # 异步发送：独立 sender 线程 + drop-oldest 队列，避免主控制环被
+            # 偶发的 TCP 发送抖动卡住（只发最新 action，丢掉积压的旧指令）。
+            self._async_send = False
+            self._send_queue: deque | None = None
+            self._send_cond = threading.Condition()
+            self._sender_thread: threading.Thread | None = None
+            self._send_timeout_ms = 100
+
             self.initialized = True
 
     # ---------- 连接 ----------
@@ -91,9 +101,24 @@ class A10TCPClient:
             except OSError as exc:
                 s.close()
                 raise ConnectionError(
-                    f"无法连接 A10 控制器 {self.host}:{self.port}: {exc}。"
+                    f"无法连接 A10控制器 {self.host}:{self.port}: {exc}。"
                     f"请确认机器人 TCP 服务已启动且网络可达。"
                 ) from exc
+            # 关闭 Nagle，保证 SET_EE_* 等小指令立即发出，降低尾延迟。
+            try:
+                s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            except OSError:
+                pass
+            # 异步模式（含重连）下给发送设超时，避免 sender 线程被 hang 住时长期持锁。
+            if self._async_send:
+                try:
+                    us = max(0, self._send_timeout_ms) * 1000
+                    s.setsockopt(
+                        socket.SOL_SOCKET, socket.SO_SNDTIMEO,
+                        struct.pack("ll", us // 1_000_000, us % 1_000_000),
+                    )
+                except OSError:
+                    pass
             self.sock = s
 
             if handshake:
@@ -124,6 +149,76 @@ class A10TCPClient:
                     # 从单例池中移除？
                     # 考虑到可能还有其他引用，这里只关闭 socket。
                     # 如果需要彻底重置，可能需要更复杂的逻辑。
+
+    # ---------- 异步发送（可选） ----------
+
+    def enable_async_send(self, send_timeout_ms: int = 100) -> None:
+        """
+        启动独立 sender 线程：send_ee_delta/send_ee_target/send_action 改为
+        非阻塞入队（drop-oldest，只保留最新），由后台线程消费。这样主控制环
+        不会因偶发 TCP 发送抖动而卡住。同时给 socket 设 SO_SNDTIMEO，保证
+        sender 线程不会无限期占用 tx_lock。
+        """
+        with self._send_cond:
+            if self._async_send:
+                return
+            self._async_send = True
+            self._send_timeout_ms = send_timeout_ms
+            self._send_queue = deque(maxlen=1)
+        # 给 socket 设发送超时，避免 sender 被 hang 住时长期持锁。
+        with self.tx_lock:
+            if self.sock is not None:
+                try:
+                    us = max(0, int(send_timeout_ms) * 1000)
+                    self.sock.setsockopt(
+                        socket.SOL_SOCKET, socket.SO_SNDTIMEO, struct.pack("ll", us // 1_000_000, us % 1_000_000)
+                    )
+                except OSError:
+                    pass
+        self._sender_thread = threading.Thread(
+            target=self._sender_loop, name="A10AsyncSender", daemon=True
+        )
+        self._sender_thread.start()
+
+    def disable_async_send(self) -> None:
+        with self._send_cond:
+            if not self._async_send:
+                return
+            self._async_send = False
+            self._send_cond.notify_all()
+        t = self._sender_thread
+        if t is not None:
+            t.join(timeout=2.0)
+            self._sender_thread = None
+        with self._send_cond:
+            self._send_queue = None
+
+    def _enqueue_send(self, line: str) -> None:
+        """非阻塞入队（drop-oldest），仅异步模式使用。"""
+        with self._send_cond:
+            if not self._async_send or self._send_queue is None:
+                return
+            self._send_queue.append(line)  # maxlen=1 自动丢弃旧值
+            self._send_cond.notify()
+
+    def _sender_loop(self) -> None:
+        while True:
+            with self._send_cond:
+                while self._async_send and (self._send_queue is None or len(self._send_queue) == 0):
+                    self._send_cond.wait(timeout=1.0)
+                if not self._async_send:
+                    return
+                if self._send_queue is None or len(self._send_queue) == 0:
+                    continue
+                line = self._send_queue.popleft()
+            try:
+                with self.tx_lock:
+                    if self.sock is not None:
+                        self.sock.sendall((line + "\n").encode("utf-8"))
+            except (OSError, socket.timeout) as exc:
+                # 发送超时/失败：丢弃这一帧，等下一帧；不杀线程。
+                # 真正的连接断开由 get_observation 的 recv 侧捕获并触发重连。
+                pass
 
     # ---------- 底层收发工具 ----------
 
@@ -241,12 +336,17 @@ class A10TCPClient:
         """
         发送目标关节位置。
         """
+        payload = json.dumps({"q": q_target.tolist()})
+        cmd = f"SET_JOINTS {payload}"
+        if self._async_send:
+            self._enqueue_send(cmd)
+            self._last_q = q_target
+            return
+
         with self.tx_lock:
             if not self.is_connected:
                 raise ConnectionError("A10TCPBus is not connected")
 
-            payload = json.dumps({"q": q_target.tolist()})
-            cmd = f"SET_JOINTS {payload}"
             self._send_line(cmd)
 
             self._last_q = q_target
@@ -262,12 +362,15 @@ class A10TCPClient:
         if len(actions) != 7:
             raise ValueError(f"SET_EE_DELTA expects 7 actions, got {len(actions)}")
 
+        payload = json.dumps({"actions": [float(v) for v in actions]})
+        cmd = f"SET_EE_DELTA {payload}"
+        if self._async_send:
+            self._enqueue_send(cmd)
+            return
+
         with self.tx_lock:
             if not self.is_connected:
                 raise ConnectionError("A10TCPBus is not connected")
-
-            payload = json.dumps({"actions": [float(v) for v in actions]})
-            cmd = f"SET_EE_DELTA {payload}"
             self._send_line(cmd)
 
     def get_ee_state(self) -> dict:
@@ -311,12 +414,15 @@ class A10TCPClient:
         if len(actions) != 7:
             raise ValueError(f"SET_EE_TARGET expects 7 actions, got {len(actions)}")
 
+        payload = json.dumps({"actions": [float(v) for v in actions]})
+        cmd = f"SET_EE_TARGET {payload}"
+        if self._async_send:
+            self._enqueue_send(cmd)
+            return
+
         with self.tx_lock:
             if not self.is_connected:
                 raise ConnectionError("A10TCPBus is not connected")
-
-            payload = json.dumps({"actions": [float(v) for v in actions]})
-            cmd = f"SET_EE_TARGET {payload}"
             self._send_line(cmd)
 
 
@@ -404,8 +510,10 @@ class A10TCPClient:
         # 通过底层 SET_JOINTS 协议发送
         payload = json.dumps({"q": q_target.tolist()})
         cmd = f"SET_JOINTS {payload}"
-        #print(f"[A10TCPClient] Sending: {cmd}")
-        self._send_line(cmd)
+        if self._async_send:
+            self._enqueue_send(cmd)
+        else:
+            self._send_line(cmd)
 
         # 你可以在服务端回一个 OK，这里可选读一行响应：
         # resp = self._recvline()

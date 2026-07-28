@@ -124,7 +124,34 @@ python src/lerobot/scripts/lerobot_record.py \
 - **回退**：两端 `git checkout` 旧 commit 即可；submodule 回退用 `git submodule update`。
 
 ## 8. 仍可继续提升（未做）
-- `send_action` 异步化（独立 sender 线程 + 丢最旧队列），消除偶发网络抖动卡主环。
-- A10 TCP 确认 `TCP_NODELAY`。
-- 夹爪摇杆加斜率限制/低通。
 - 闭环若 obs EE 有延迟，可加预测补偿。
+- 夹爪摇杆斜率限制（用户反馈当前无影响，跳过）。
+
+## 9. 第二轮优化（异步发送 + TCP_NODELAY）
+
+在原方案基础上补做两项网络层优化，消除偶发 TCP 抖动对控制环的卡顿：
+
+### 9.1 `a10_client.py`
+- `connect` 时对 socket 设 `TCP_NODELAY`（关闭 Nagle，小指令立即发出）。
+- 新增可选异步发送：`enable_async_send(send_timeout_ms=100)` 启动独立 daemon sender 线程，
+  配 `deque(maxlen=1)` + `threading.Condition` 实现 **drop-oldest**（只保留最新 action，
+  丢掉积压旧指令）；并设 `SO_SNDTIMEO`，保证 sender 不会无限期占用 `tx_lock`。
+- `send_ee_delta` / `send_ee_target` / `send_action` / `sync_write`：异步模式开启时
+  走 `_enqueue_send`（非阻塞入队），否则保持原同步行为（向后兼容）。
+- 重连场景：`connect` 在 `_async_send=True` 时也会重新设 `SO_SNDTIMEO`，sender 线程
+  复用同一 client 实例，自动衔接新 socket。
+
+### 9.2 `teleoperate.py`
+- 新增 `--no-async-send` 开关（默认开启异步发送）；机器人连接成功后调用
+  `robot.client.enable_async_send(100)`。
+
+### 9.3 验证
+- One Euro 滤波单测：方波噪声 std 0.05 → 滤波后 0.011，收敛正常。
+- 异步队列单测：5 个快速入队指令，慢 sender 只发 cmd0 与 cmd4（最新），中间 cmd1-3 被丢弃，符合预期。
+
+### 9.4 行为说明
+- 正常网络下发送 <1ms，sender 不积压，行为与同步一致。
+- 网络抖动时：主环不再因 `send_action` 阻塞而卡顿（入队即返回）；最坏情况下
+  `get_observation` 的 GET 请求可能等待 sender 释放 `tx_lock`，但被 `SO_SNDTIMEO=100ms` 上界限制。
+- 丢帧对 `SET_EE_TARGET`（绝对目标）无害：下一帧 target 覆盖；对 `SET_EE_DELTA`（累加）
+  会丢一个增量步，72Hz 下影响可忽略。
