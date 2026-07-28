@@ -120,10 +120,19 @@ def _to_policy_chw(frame_rgb: np.ndarray, size: int = 224) -> np.ndarray:
     return np.ascontiguousarray(chw, dtype=np.uint8)
 
 
+def _build_mock_observation(prompt: str) -> dict:
+    """dry-run 用:全零 obs,不依赖真实机器人/相机。"""
+    return {
+        "observation/state": np.zeros((1, 7), dtype=np.float32),
+        "observation/images/right": np.zeros((3, 224, 224), dtype=np.uint8),
+        "observation/images/top": np.zeros((3, 224, 224), dtype=np.uint8),
+        "prompt": prompt,
+    }
+
+
 def _build_observation(robot: A10Follower, prompt: str) -> dict:
     """从 A10Follower 观测构建 π0.5 期望的 obs dict。"""
     obs = robot.get_observation()
-    # 关节状态:7D (joint_1..joint_6, gripper)
     state = np.array(
         [obs[f"{n}.pos"] for n in robot.joint_names], dtype=np.float32
     ).reshape(1, 7)
@@ -192,11 +201,12 @@ def main() -> None:
             index_or_path=int(args.camera_index), fps=30, width=640, height=480,
             rotation=Cv2Rotation.ROTATE_180,
         )}
-    robot = A10Follower(A10FollowerConfig(
-        host=args.robot_host, port=args.robot_port,
-        n_joints=7, use_ee_delta=False,  # 关节模式
-        cameras=cam if cam is not None else None,
-    ))
+    # 仅在有自定义相机时覆盖, 否则用 A10FollowerConfig 默认相机 (避免传 None 清空默认)
+    cfg_kwargs = dict(host=args.robot_host, port=args.robot_port,
+                      n_joints=7, use_ee_delta=False)  # 关节模式
+    if cam is not None:
+        cfg_kwargs["cameras"] = cam
+    robot = A10Follower(A10FollowerConfig(**cfg_kwargs))
 
     # --- π0.5 客户端 + chunk broker ---
     client = websocket_client_policy.WebsocketClientPolicy(
@@ -217,7 +227,10 @@ def main() -> None:
         while step_count < args.steps:
             t0 = time.perf_counter()
 
-            obs = _build_observation(robot, args.prompt)
+            if args.dry_run:
+                obs = _build_mock_observation(args.prompt)
+            else:
+                obs = _build_observation(robot, args.prompt)
             t_infer = time.perf_counter()
             result = broker.infer(obs)
             infer_ms = (time.perf_counter() - t_infer) * 1e3
