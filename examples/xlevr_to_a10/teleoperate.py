@@ -33,7 +33,7 @@ ROBOT_LINK_ERRORS = (
 )
 
 FPS = 30
-XLEVR_PATH = "/home/allen/Allen/XLeRobot/XLeVR"
+XLEVR_PATH = "/home/robot/VLA/XLeRobot/XLeVR"
 DEFAULT_JOINTS = ("joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6", "gripper")
 
 

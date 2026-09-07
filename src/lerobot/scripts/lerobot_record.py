@@ -594,14 +594,13 @@ if __name__ == "__main__":
         "--robot.use_ee_delta=true",
         #"--teleop.type=a10_leader",
         "--teleop.type=xlevr",
-        "--teleop.xlevr_path=/home/allen/Allen/XLeRobot/XLeVR",
+        "--teleop.xlevr_path=/home/robot/VLA/XLeRobot/XLeVR",
         "--teleop.arm=right",
         f"--dataset.repo_id={default_repo_id}",
         "--dataset.single_task=test_a10",
         "--display_data=False",    
         "--dataset.fps=30",
         "--dataset.push_to_hub=False",
-        "--robot.cameras={\"right\": {\"type\": \"opencv\", \"index_or_path\": 0, \"width\": 640, \"rotation\": \"ROTATE_180\", \"height\": 480, \"fps\": 30}}"
      ]
     sys.argv = [sys.argv[0]] + defaults + sys.argv[1:]
 

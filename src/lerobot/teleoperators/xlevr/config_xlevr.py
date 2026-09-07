@@ -10,7 +10,7 @@ from lerobot.teleoperators.config import TeleoperatorConfig
 class XLeVRTeleopConfig(TeleoperatorConfig):
     """Configuration for XLeVR WebXR teleoperation."""
 
-    xlevr_path: str = "/home/allen/Allen/XLeRobot/XLeVR"
+    xlevr_path: str = "/home/robot/VLA/XLeRobot/XLeVR"
     arm: str = "right"
     connection_timeout: float = 10.0
 

@@ -23,7 +23,7 @@ from lerobot.teleoperators.xlevr.factory import make_xlevr_a10_processors
 from lerobot.teleoperators.xlevr.teleop_xlevr import XLeVRTeleop
 from lerobot.utils.robot_utils import precise_sleep
 
-XLEVR_PATH = "/home/allen/Allen/XLeRobot/XLeVR"
+XLEVR_PATH = "/home/robot/VLA/XLeRobot/XLeVR"
 FAKE_OBS = {f"joint_{i}.pos": 0.0 for i in range(1, 7)} | {"gripper.pos": 0.0}
 TCP_KEYS = (
     "ee.enabled",
