@@ -7,6 +7,17 @@ from __future__ import annotations
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
+# VR body: +X right, +Y up, +Z back.
+# SET_EE_DELTA is end-effector local (not world/base). Same arm model keeps this
+# map even if the base is mounted in a different orientation:
+#   robot EE +X up, +Y right, +Z forward
+#   robot = M @ vr  (same M for position and rotvec; M in SO(3))
+AXIS_REMAP_VR_TO_ROBOT: tuple[tuple[float, float, float], ...] = (
+    (0.0, 1.0, 0.0),
+    (1.0, 0.0, 0.0),
+    (0.0, 0.0, -1.0),
+)
+
 
 def normalize_quat_xyzw(quat: np.ndarray) -> np.ndarray:
     q = np.asarray(quat, dtype=float).reshape(4)
@@ -53,5 +64,6 @@ def remap_position(delta: np.ndarray, axis_remap: tuple[tuple[float, float, floa
 
 
 def remap_rotvec(rotvec: np.ndarray, axis_remap: tuple[tuple[float, float, float], ...]) -> np.ndarray:
+    """Change-of-basis for a rotation vector. Valid at finite angle iff axis_remap is in SO(3)."""
     matrix = np.asarray(axis_remap, dtype=float)
     return matrix @ np.asarray(rotvec, dtype=float)

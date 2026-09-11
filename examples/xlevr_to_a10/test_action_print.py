@@ -39,7 +39,7 @@ TCP_KEYS = (
 )
 
 
-# Robot frame: +X up, +Y right, +Z forward
+# SET_EE_DELTA is EE local: +X up, +Y right, +Z forward
 DIM_LABELS_POS = {
     "dx": ("向上", "向下"),
     "dy": ("向右", "向左"),
@@ -50,6 +50,7 @@ DIM_LABELS_ROT = {
     "ry": ("绕Y逆时针", "绕Y顺时针"),
     "rz": ("绕Z逆时针", "绕Z顺时针"),
 }
+RPY_HINT = "EE局部: 手柄上→+X 右→+Y 前→+Z | yaw/pitch/roll 跟手柄转"
 
 
 def _describe_axis_group(
@@ -192,7 +193,8 @@ def main():
     print(f"  VR 浏览器发送: ~72-90 Hz (A-Frame tick)", flush=True)
     print(f"  本脚本/TCP 控制: {args.control_fps} Hz", flush=True)
     print("  按住 squeeze 才控制机械臂 | 右手摇杆 x 直接作为夹爪指令", flush=True)
-    print("  机器人坐标: +X前 +Y左 +Z上 | 平移/姿态分开判定方向", flush=True)
+    print("  机器人坐标: EE局部 +X上 +Y右 +Z前 | 平移/姿态分开判定方向", flush=True)
+    print(f"  {RPY_HINT}", flush=True)
     print("=" * 60, flush=True)
 
     try:

@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 
 from lerobot.teleoperators.config import TeleoperatorConfig
+from lerobot.teleoperators.xlevr.quaternion_utils import AXIS_REMAP_VR_TO_ROBOT
 
 
 @TeleoperatorConfig.register_subclass("xlevr")
@@ -33,13 +34,8 @@ class XLeVRTeleopConfig(TeleoperatorConfig):
     gripper_thumbstick_axis: str = "x"
     gripper_thumbstick_deadzone: float = 0.05
 
-    # VR body: +X right, +Y up, +Z back. Robot: +X up, +Y right, +Z forward.
     axis_remap: tuple[tuple[float, float, float], ...] = field(
-        default_factory=lambda: (
-            (0.0, 1.0, 0.0),
-            (1.0, 0.0, 0.0),
-            (0.0, 0.0, -1.0),
-        )
+        default_factory=lambda: AXIS_REMAP_VR_TO_ROBOT
     )
 
     enable_left_events: bool = True

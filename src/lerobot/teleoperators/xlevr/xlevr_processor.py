@@ -8,6 +8,7 @@ import numpy as np
 from lerobot.configs.types import FeatureType, PipelineFeatureType, PolicyFeature
 from lerobot.processor import ProcessorStepRegistry, RobotAction, RobotActionProcessorStep
 from lerobot.teleoperators.xlevr.quaternion_utils import (
+    AXIS_REMAP_VR_TO_ROBOT,
     delta_position_body,
     parse_quat_xyzw,
     quat_delta_rotvec_body_rad,
@@ -39,11 +40,7 @@ class XLeVRDeltaEEMapper(RobotActionProcessorStep):
     gripper_thumbstick_deadzone: float = 0.05
 
     axis_remap: tuple[tuple[float, float, float], ...] = field(
-        default_factory=lambda: (
-            (0.0, 1.0, 0.0),
-            (1.0, 0.0, 0.0),
-            (0.0, 0.0, -1.0),
-        )
+        default_factory=lambda: AXIS_REMAP_VR_TO_ROBOT
     )
 
     _prev_position: np.ndarray | None = field(default=None, init=False, repr=False)
@@ -138,15 +135,18 @@ class XLeVRDeltaEEMapper(RobotActionProcessorStep):
             current_pos = np.asarray(target_position, dtype=float) * self.vr_to_robot_scale
             if self._prev_position is None:
                 self._prev_position = current_pos.copy()
-            elif self._prev_orientation_quat is not None:
-                raw_delta = (
-                    delta_position_body(
-                        self._prev_position,
-                        current_pos,
-                        self._prev_orientation_quat,
+            else:
+                if self._prev_orientation_quat is not None:
+                    raw_delta = (
+                        delta_position_body(
+                            self._prev_position,
+                            current_pos,
+                            self._prev_orientation_quat,
+                        )
+                        * pos_scale_eff
                     )
-                    * pos_scale_eff
-                )
+                else:
+                    raw_delta = (current_pos - self._prev_position) * pos_scale_eff
                 self._prev_position = current_pos.copy()
                 delta_pos = remap_position(raw_delta, self.axis_remap)
                 delta_pos = self._clip_delta_pos(delta_pos)

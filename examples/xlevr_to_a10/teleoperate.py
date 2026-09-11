@@ -2,7 +2,7 @@
 """
 Teleoperate A10 with XLeVR — body-frame quaternion deltas -> SET_EE_DELTA (7D rotvec).
 
-Robot frame: +X up, +Y right, +Z forward.
+Robot frame: EE local +X up, +Y right, +Z forward (independent of base mount).
 
 Usage:
     cd /home/allen/Allen/lerobot
@@ -187,9 +187,37 @@ def main():
 
     print("XLeVR 遥操作运行中，Ctrl+C 停止。")
     print("右手 squeeze=粗调 | 前扳机=精调(无需 squeeze) | 摇杆 x=夹爪 | 左手摇杆=record.py 事件")
+    print("未按 squeeze/扳机时机械臂不会动；下方每秒打印 enabled / squeeze / delta。")
     frame = 0
     robot_link_ok = robot is not None and robot.is_connected
     next_reconnect_at = 0.0
+    status_keys = (
+        "ee.enabled",
+        "vr.button_squeeze",
+        "vr.trigger",
+        "ee.delta_x",
+        "ee.delta_y",
+        "ee.delta_z",
+        "ee.delta_rx",
+        "ee.delta_ry",
+        "ee.delta_rz",
+        "gripper.pos",
+    )
+
+    def _print_action_status(prefix: str, action: dict) -> None:
+        has_quat = raw_action.get("xlevr.orientation_quat") is not None
+        has_pos = raw_action.get("xlevr.target_position") is not None
+        vr_status = teleop.get_status()
+        has_right = vr_status.get("has_right_goal")
+        summary = ", ".join(f"{k}={action.get(k)}" for k in status_keys if k in action)
+        hint = ""
+        if not has_right or not has_pos:
+            hint = "  << 没有右手柄位姿。请在 VR 浏览器点 Enter VR，确认右手柄已配对；页面需强制刷新。"
+        print(
+            f"[{prefix} {frame}] right_goal={has_right} pos={has_pos} quat={has_quat} | {summary}{hint}",
+            flush=True,
+        )
+
     try:
         while True:
             start = time.perf_counter()
@@ -233,21 +261,10 @@ def main():
                     if not args.reconnect:
                         raise
                     print("机器人已断开，VR 仍运行；等待对端程序重启后自动重连 ...")
+                if frame % args.print_every == 0:
+                    _print_action_status("tcp", robot_action)
             elif robot is None and frame % args.print_every == 0:
-                keys = (
-                    "ee.delta_x",
-                    "ee.delta_y",
-                    "ee.delta_z",
-                    "ee.delta_rx",
-                    "ee.delta_ry",
-                    "ee.delta_rz",
-                    "gripper.pos",
-                    "vr.thumbstick_x",
-                    "vr.button_squeeze",
-                    "vr.trigger",
-                )
-                summary = ", ".join(f"{k}={robot_action.get(k)}" for k in keys if k in robot_action)
-                print(f"[frame {frame}] {summary}")
+                _print_action_status("vr-only", robot_action)
 
             frame += 1
             dt = time.perf_counter() - start

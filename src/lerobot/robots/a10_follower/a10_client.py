@@ -256,7 +256,7 @@ class A10TCPClient:
         Send 7D end-effector delta action at control rate (always).
 
         actions layout: [dx, dy, dz, rotvec_x, rotvec_y, rotvec_z (rad), gripper]
-        Robot frame: +X up, +Y right, +Z forward; positive rotvec = CCW (right-hand rule).
+        Robot frame (EE local): +X up, +Y right, +Z forward; positive rotvec = CCW (right-hand rule).
         When teleop is disabled, arm deltas (first 6) are zero; gripper is still sent.
         """
         if len(actions) != 7:

@@ -55,7 +55,7 @@ python -m lerobot.scripts.lerobot_ws_act_policy_server \
 
 #vr (body 系四元数; 机器人 +X上 +Y右 +Z前; 30Hz)
  真机(无相机)
- python examples/xlevr_to_a10/teleoperate.py --robot-host 192.168.1.12 --robot-port 8080
+ python examples/xlevr_to_a10/teleoperate.py --robot-host 192.168.110.124 --robot-port 8080
  # 机械臂 TCP 重启后自动重连(默认开启); 断线即退出: --no-reconnect
  只测试vr(打印输出)
  python examples/xlevr_to_a10/teleoperate.py --vr-only

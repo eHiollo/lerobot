@@ -44,8 +44,11 @@ VR 浏览器 (WebXR)
 
 ### 机器人 `SET_EE_DELTA` 系
 
-- **+X** 上，**+Y** 右，**+Z** 前
-- `axis_remap`：`上=+VR_Y, 右=+VR_X, 前=-VR_Z`
+增量在 **末端（EE）局部系**，不是世界/基座系。同款臂、基座怎么转都不改 `axis_remap`。
+
+EE：**+X** 上，**+Y** 右，**+Z** 前。
+
+`axis_remap`（平移与 rotvec 共用）：`上=+VR_Y, 右=+VR_X, 前=-VR_Z`
 
 ### TCP 7 维
 
