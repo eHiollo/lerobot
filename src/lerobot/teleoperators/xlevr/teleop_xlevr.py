@@ -54,6 +54,10 @@ class XLeVRTeleop(Teleoperator):
             "xlevr.trigger": float,
             "xlevr.thumbstick": dict,
             "xlevr.buttons": dict,
+            "xlevr.sample_receive_time_s": float,
+            "xlevr.sample_age_s": float,
+            "xlevr.sample_sequence": int,
+            "xlevr.source_timestamp": float,
         }
 
     @property
@@ -168,7 +172,10 @@ class XLeVRTeleop(Teleoperator):
         if metadata.get("reset_target_to_current") and goal.target_position is None:
             return self._idle_action()
 
-        trigger = float(metadata.get("trigger", 0.0))
+        try:
+            trigger = float(metadata.get("trigger", 0.0))
+        except (TypeError, ValueError):
+            trigger = float("nan")
         buttons = dict(metadata.get("buttons", {}) or {})
         grip_active = bool(metadata.get("grip_active", False))
         if grip_active:
@@ -176,19 +183,47 @@ class XLeVRTeleop(Teleoperator):
         squeeze_active = bool(buttons.get("squeeze", False))
 
         orientation_quat = parse_quat_xyzw(metadata.get("orientation_quat"))
-
-        return {
-            "xlevr.enabled": squeeze_active and goal.target_position is not None,
-            "xlevr.target_position": (
+        try:
+            receive_time_s = float(metadata.get("pose_receive_monotonic_s", -1.0))
+            sample_sequence = int(metadata.get("pose_sequence", -1))
+        except (TypeError, ValueError, OverflowError):
+            receive_time_s = -1.0
+            sample_sequence = -1
+        sample_age_s = (
+            max(0.0, time.monotonic() - receive_time_s) if receive_time_s >= 0.0 else -1.0
+        )
+        try:
+            target_position = (
                 np.asarray(goal.target_position, dtype=float)
                 if goal.target_position is not None
                 else None
-            ),
+            )
+        except (TypeError, ValueError):
+            target_position = np.full(3, np.nan)
+        source_timestamp = metadata.get("source_timestamp", -1.0)
+        try:
+            source_timestamp = float(source_timestamp)
+        except (TypeError, ValueError):
+            source_timestamp = -1.0
+
+        fine_active = trigger >= self.config.fine_trigger_threshold
+        if self.config.require_squeeze_to_move:
+            control_requested = squeeze_active or fine_active
+        else:
+            control_requested = True
+
+        return {
+            "xlevr.enabled": control_requested and goal.target_position is not None,
+            "xlevr.target_position": target_position,
             "xlevr.orientation_quat": orientation_quat,
             "xlevr.grip_active": grip_active,
             "xlevr.trigger": trigger,
             "xlevr.thumbstick": dict(metadata.get("thumbstick", {}) or {}),
             "xlevr.buttons": buttons,
+            "xlevr.sample_receive_time_s": receive_time_s,
+            "xlevr.sample_age_s": sample_age_s,
+            "xlevr.sample_sequence": sample_sequence,
+            "xlevr.source_timestamp": source_timestamp,
         }
 
     def get_vr_events(self) -> dict[str, bool]:
@@ -208,9 +243,14 @@ class XLeVRTeleop(Teleoperator):
             "xlevr.enabled": enabled,
             "xlevr.target_position": None,
             "xlevr.orientation_quat": None,
+            "xlevr.grip_active": False,
             "xlevr.trigger": 0.0,
             "xlevr.thumbstick": {},
             "xlevr.buttons": {},
+            "xlevr.sample_receive_time_s": -1.0,
+            "xlevr.sample_age_s": -1.0,
+            "xlevr.sample_sequence": -1,
+            "xlevr.source_timestamp": -1.0,
         }
 
     def send_feedback(self, feedback: dict[str, float]) -> None:

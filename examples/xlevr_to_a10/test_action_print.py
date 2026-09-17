@@ -34,8 +34,6 @@ TCP_KEYS = (
     "ee.delta_ry",
     "ee.delta_rz",
     "gripper.pos",
-    "vr.button_squeeze",
-    "vr.thumbstick_x",
 )
 
 
@@ -223,9 +221,10 @@ def main():
             processed = teleop_action_processor((raw, FAKE_OBS))
             robot_action = robot_action_processor((processed, FAKE_OBS))
             tcp_payload = action_to_tcp_payload(robot_action)
+            raw_thumbstick = raw.get("xlevr.thumbstick", {}) or {}
 
             if args.print_idle or is_meaningful_tcp(
-                tcp_payload, float(robot_action.get("vr.thumbstick_x", 0.0))
+                tcp_payload, float(raw_thumbstick.get("x", 0.0))
             ):
                 actions = tcp_payload.get("actions", [])
                 enabled = bool(robot_action.get("ee.enabled", False))

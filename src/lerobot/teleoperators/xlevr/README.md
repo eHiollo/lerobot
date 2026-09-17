@@ -72,6 +72,47 @@ SET_EE_DELTA {"actions": [dx, dy, dz, rx, ry, rz, gripper]}
 
 默认控制 / 录制频率：**30 Hz**。
 
+### A1 位置安全模式
+
+默认 `position_control_mode=safe_frame_delta`：首次使能只建参考点，过期、时间回退、无效数值
+或 VR 跳点均输出六维零增量。跳点恢复只在连续稳定的新位置重锚，不补发中间未知轨迹。
+
+默认 `motion_shaping_mode=robot_controller`：LeRobot 只做输入防护和坐标映射，低通、速度/
+加速度限制及顺滑由 A10 `vr_vel` 的 500 Hz 控制环负责，避免两端重复整形。
+
+仅在离线对比或回退 A1.2 时启用 LeRobot 整形：
+
+```bash
+--teleop.motion_shaping_mode=lerobot_a1
+```
+
+回退 A1.1 前的旧输入路径：
+
+```bash
+--teleop.position_control_mode=legacy_frame_delta
+```
+
+正常 A10 `vr_vel` 实机运行不要同时开启 `lerobot_a1`。
+
+### A1.3 诊断记录
+
+正式 `lerobot_record` 默认把逐帧诊断写到数据集旁路文件：
+
+```text
+<dataset_root>/meta/xlevr_diagnostics/session_YYYYmmdd_HHMMSS.jsonl
+```
+
+每条记录包含原始 VR 位姿/按键、单调接收时间、样本 age/sequence、状态与过滤原因、
+滤波前后速度、速度/加速度限幅标志、最终 EE 增量以及实际 `sent_action`。写盘由有界后台
+队列完成；队列满时丢诊断帧而不阻塞控制，退出时日志会报告 written/dropped 数量。
+默认模式下 `motion_shaping_owner=a10_vr_vel`、`shaping_bypassed=true`，LeRobot 侧限幅标志
+应为 false。
+
+训练 action 仅保留 `ee.enabled`、6 个 `ee.delta_*` 和 `gripper.pos`。原始 `vr.*`
+不再混入训练 action，而保存在 JSONL 元数据旁路；A10 TCP 仍是原来的 7 维命令。
+
+可用 `--teleop.record_vr_diagnostics=false` 关闭正式录制诊断。
+
 ---
 
 ## 常用命令
@@ -80,6 +121,8 @@ SET_EE_DELTA {"actions": [dx, dy, dz, rx, ry, rz, gripper]}
 cd /home/allen/Allen/lerobot
 
 python examples/xlevr_to_a10/teleoperate.py --robot-host 192.168.1.12 --robot-port 8080
+python examples/xlevr_to_a10/teleoperate.py --vr-only \
+  --diagnostics-jsonl /tmp/xlevr_vr_only.jsonl
 python examples/xlevr_to_a10/test_action_print.py
 ```
 
@@ -91,7 +134,8 @@ python examples/xlevr_to_a10/test_action_print.py
 
 | 文件 | 作用 |
 |------|------|
-| `config_xlevr.py` | 缩放、死区、轴映射、精调扳机 |
+| `config_xlevr.py` | 模式、时序、安全整形、缩放、死区、轴映射、精调扳机 |
+| `diagnostics.py` | 有界异步 JSONL 记录器与 mapper 诊断提取 |
 | `teleop_xlevr.py` | `Teleoperator`：连 XLeVR、读手柄 |
 | `vr_monitor_bridge.py` | HTTPS/WS、合并 ControlGoal |
 | `xlevr_processor.py` | body 系 VR → `ee.delta_*` |

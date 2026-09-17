@@ -182,6 +182,10 @@ class VRMonitorBridge:
         self.command_queue = None
         self.goals_received = 0
         self.last_goal_time: float | None = None
+        self.last_goal_monotonic_s: float | None = None
+        self.last_pose_monotonic_s: float | None = None
+        self._goal_sequence = 0
+        self._pose_sequence = 0
         self.servers_started = False
         self.startup_error: BaseException | None = None
 
@@ -256,20 +260,53 @@ class VRMonitorBridge:
         while self.is_running:
             try:
                 goal = await asyncio.wait_for(self.command_queue.get(), timeout=1.0)
-                with self._goal_lock:
-                    if goal.arm == "left":
-                        self.left_goal = goal
-                    elif goal.arm == "right":
-                        self.right_goal = self._merge_goal(self.right_goal, goal)
-                    elif goal.arm == "headset":
-                        self.headset_goal = goal
-                    self.latest_goal = goal
-                self.goals_received += 1
-                self.last_goal_time = time.time()
+                self._record_goal(goal)
             except asyncio.TimeoutError:
                 continue
             except Exception as exc:
                 logger.error("Error processing VR command: %s", exc)
+
+    def _record_goal(
+        self,
+        goal: Any,
+        *,
+        receive_monotonic_s: float | None = None,
+        receive_wall_s: float | None = None,
+    ) -> Any:
+        """Atomically stamp and cache one goal; explicit times keep replay tests deterministic."""
+        receive_monotonic_s = (
+            time.monotonic() if receive_monotonic_s is None else receive_monotonic_s
+        )
+        receive_wall_s = time.time() if receive_wall_s is None else receive_wall_s
+        with self._goal_lock:
+            self._goal_sequence += 1
+            metadata = dict(getattr(goal, "metadata", None) or {})
+            metadata["bridge_receive_monotonic_s"] = receive_monotonic_s
+            metadata["bridge_goal_sequence"] = self._goal_sequence
+            # Preserve a source timestamp when an upstream XLeVR version supplies one.
+            if "source_timestamp" not in metadata and "timestamp" in metadata:
+                metadata["source_timestamp"] = metadata["timestamp"]
+            if getattr(goal, "target_position", None) is not None:
+                # A new pose must not inherit an older pose's source timestamp.
+                metadata.setdefault("source_timestamp", None)
+                self._pose_sequence += 1
+                metadata["pose_receive_monotonic_s"] = receive_monotonic_s
+                metadata["pose_sequence"] = self._pose_sequence
+                self.last_pose_monotonic_s = receive_monotonic_s
+            goal.metadata = metadata
+
+            if goal.arm == "left":
+                self.left_goal = goal
+            elif goal.arm == "right":
+                self.right_goal = self._merge_goal(self.right_goal, goal)
+                goal = self.right_goal
+            elif goal.arm == "headset":
+                self.headset_goal = goal
+            self.latest_goal = goal
+            self.goals_received += 1
+            self.last_goal_time = receive_wall_s
+            self.last_goal_monotonic_s = receive_monotonic_s
+            return goal
 
     @staticmethod
     def _merge_goal(previous: Any, current: Any) -> Any:
@@ -321,18 +358,24 @@ class VRMonitorBridge:
         if self.vr_server is not None and hasattr(self.vr_server, "clients"):
             ws_clients = len(self.vr_server.clients)
 
-        now = time.time()
-        last_age = None if self.last_goal_time is None else now - self.last_goal_time
+        now = time.monotonic()
+        with self._goal_lock:
+            goals_received = self.goals_received
+            last_age = (
+                None if self.last_goal_monotonic_s is None else now - self.last_goal_monotonic_s
+            )
+            pose_age = None if self.last_pose_monotonic_s is None else now - self.last_pose_monotonic_s
+        control_age = pose_age if pose_age is not None else last_age
 
         if ws_clients == 0:
             phase = "waiting_browser"
             hint = "VR 浏览器还没连上 WebSocket，请打开 https 页面并进入 VR"
-        elif self.goals_received == 0:
+        elif goals_received == 0:
             phase = "browser_connected_no_data"
             hint = "浏览器已连接，但还没收到手柄数据，请在 VR 里移动手柄"
-        elif last_age is not None and last_age > 3.0:
+        elif control_age is not None and control_age > 3.0:
             phase = "stale"
-            hint = f"超过 {last_age:.1f}s 没收到新数据，检查 VR 页面是否仍在前台"
+            hint = f"超过 {control_age:.1f}s 没收到新 pose，检查 VR 页面是否仍在前台"
         else:
             phase = "receiving"
             hint = "正在接收 VR 数据"
@@ -349,8 +392,9 @@ class VRMonitorBridge:
             "thread_alive": self.is_running,
             "ssl_cert_ok": cert_ok,
             "ws_clients": ws_clients,
-            "goals_received": self.goals_received,
+            "goals_received": goals_received,
             "last_goal_age_s": last_age,
+            "last_pose_age_s": pose_age,
             "has_left_goal": self.left_goal is not None,
             "has_right_goal": self.right_goal is not None,
             "phase": phase,

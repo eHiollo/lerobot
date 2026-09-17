@@ -20,6 +20,7 @@ import shutil
 import tempfile
 import warnings
 from dataclasses import dataclass, field
+from fractions import Fraction
 from pathlib import Path
 from threading import Lock
 from typing import Any, ClassVar
@@ -404,25 +405,24 @@ def encode_video_frames(
         raise OSError(f"Video encoding did not work. File not found: {video_path}.")
 
 
+def _rescale_ts(ts: int | None, src_tb: Fraction, dst_tb: Fraction) -> int | None:
+    if ts is None:
+        return None
+    if src_tb == dst_tb:
+        return int(ts)
+    return int(round(ts * float(src_tb / dst_tb)))
+
+
 def concatenate_video_files(
     input_video_paths: list[Path | str], output_video_path: Path, overwrite: bool = True
 ):
     """
     Concatenate multiple video files into a single video file using pyav.
 
-    This function takes a list of video input file paths and concatenates them into a single
-    output video file. It uses ffmpeg's concat demuxer with stream copy mode for fast
-    concatenation without re-encoding.
-
-    Args:
-        input_video_paths: Ordered list of input video file paths to concatenate.
-        output_video_path: Path to the output video file.
-        overwrite: Whether to overwrite the output video file if it already exists. Default is True.
-
-    Note:
-        - Creates a temporary directory for intermediate files that is cleaned up after use.
-        - Uses ffmpeg's concat demuxer which requires all input videos to have the same
-          codec, resolution, and frame rate for proper concatenation.
+    PyAV 14 cannot set output `time_base` (decoder-backed streams crash). The concat
+    demuxer then writes the first file at 1/90000 and the next episode still at
+    1/15360, so later `save_episode()` calls fail with non-monotonic DTS. Remux each
+    file separately and rescale timestamps onto one time base instead.
     """
 
     output_video_path = Path(output_video_path)
@@ -436,53 +436,70 @@ def concatenate_video_files(
     if len(input_video_paths) == 0:
         raise FileNotFoundError("No input video paths provided.")
 
-    # Create a temporary .ffconcat file to list the input video paths
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".ffconcat", delete=False) as tmp_concatenate_file:
-        tmp_concatenate_file.write("ffconcat version 1.0\n")
-        for input_path in input_video_paths:
-            tmp_concatenate_file.write(f"file '{str(input_path.resolve())}'\n")
-        tmp_concatenate_file.flush()
-        tmp_concatenate_path = tmp_concatenate_file.name
-
-    # Create input and output containers
-    input_container = av.open(
-        tmp_concatenate_path, mode="r", format="concat", options={"safe": "0"}
-    )  # safe = 0 allows absolute paths as well as relative paths
-
+    paths = [Path(p).resolve() for p in input_video_paths]
     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_named_file:
         tmp_output_video_path = tmp_named_file.name
 
-    output_container = av.open(
-        tmp_output_video_path, mode="w", options={"movflags": "faststart"}
-    )  # faststart is to move the metadata to the beginning of the file to speed up loading
+    output_container = None
+    try:
+        output_container = av.open(
+            tmp_output_video_path,
+            mode="w",
+            options={"movflags": "faststart"},
+        )
+        with av.open(str(paths[0])) as first:
+            template = next((s for s in first.streams if s.type == "video"), None)
+            if template is None:
+                raise ValueError(f"No video stream in {paths[0]}")
+            src_timescale = max(int(round(1 / float(template.time_base))), 1)
+            output_stream = output_container.add_stream_from_template(template=template, opaque=True)
 
-    # Replicate input streams in output container
-    stream_map = {}
-    for input_stream in input_container.streams:
-        if input_stream.type in ("video", "audio", "subtitle"):  # only copy compatible streams
-            stream_map[input_stream.index] = output_container.add_stream_from_template(
-                template=input_stream, opaque=True
-            )
-            # PyAV <15: this stream is decoder-backed; setting time_base crashes.
+        try:
+            dst_tb = output_stream.time_base or Fraction(1, src_timescale)
+        except Exception:
+            dst_tb = Fraction(1, src_timescale)
+        if dst_tb is None:
+            dst_tb = Fraction(1, src_timescale)
 
-    # Demux + remux packets (no re-encode)
-    for packet in input_container.demux():
-        # Skip packets from un-mapped streams
-        if packet.stream.index not in stream_map:
-            continue
+        next_dts = 0
+        for path in paths:
+            with av.open(str(path)) as src:
+                video_stream = next((s for s in src.streams if s.type == "video"), None)
+                if video_stream is None:
+                    raise ValueError(f"No video stream in {path}")
+                src_tb = video_stream.time_base
+                file_offset = None
+                for packet in src.demux(video_stream):
+                    if packet.dts is None:
+                        continue
 
-        # Skip demux flushing packets
-        if packet.dts is None:
-            continue
+                    dts = _rescale_ts(packet.dts, src_tb, dst_tb)
+                    pts = _rescale_ts(packet.pts, src_tb, dst_tb)
+                    duration = _rescale_ts(packet.duration, src_tb, dst_tb) or 0
+                    if pts is None:
+                        pts = dts
 
-        output_stream = stream_map[packet.stream.index]
-        packet.stream = output_stream
-        output_container.mux(packet)
+                    if file_offset is None:
+                        file_offset = next_dts - dts
+                    dts += file_offset
+                    pts += file_offset
 
-    input_container.close()
-    output_container.close()
+                    packet.stream = output_stream
+                    packet.time_base = dst_tb
+                    packet.dts = dts
+                    packet.pts = pts
+                    if packet.duration is not None:
+                        packet.duration = duration
+                    output_container.mux(packet)
+                    next_dts = max(next_dts, dts + max(duration, 1))
+    except Exception:
+        Path(tmp_output_video_path).unlink(missing_ok=True)
+        raise
+    finally:
+        if output_container is not None:
+            output_container.close()
+
     shutil.move(tmp_output_video_path, output_video_path)
-    Path(tmp_concatenate_path).unlink()
 
 
 @dataclass

@@ -30,13 +30,19 @@ def normalize_quat_xyzw(quat: np.ndarray) -> np.ndarray:
 def parse_quat_xyzw(value) -> np.ndarray | None:
     if value is None:
         return None
-    if isinstance(value, dict):
-        keys = ("x", "y", "z", "w")
-        if not all(k in value for k in keys):
-            return None
-        return normalize_quat_xyzw([value["x"], value["y"], value["z"], value["w"]])
-    arr = np.asarray(value, dtype=float).reshape(-1)
-    if arr.shape[0] != 4:
+    try:
+        if isinstance(value, dict):
+            keys = ("x", "y", "z", "w")
+            if not all(k in value for k in keys):
+                return None
+            arr = np.asarray([value["x"], value["y"], value["z"], value["w"]], dtype=float)
+        else:
+            arr = np.asarray(value, dtype=float).reshape(-1)
+            if arr.shape[0] != 4:
+                return None
+    except (TypeError, ValueError):
+        return None
+    if not np.all(np.isfinite(arr)) or np.linalg.norm(arr) < 1e-12:
         return None
     return normalize_quat_xyzw(arr)
 

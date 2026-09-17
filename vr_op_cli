@@ -1,0 +1,82 @@
+# vr数据录制 
++
+conda activate lerobot
+cd /home/robot/VLA/lerobot
+
+python examples/xlevr_to_a10/teleoperate.py \
+  --vr-only \
+  --xlevr-path /home/robot/VLA/XLeRobot/XLeVR \
+  --fps 30 \
+  --diagnostics-jsonl /home/robot/VLA/lerobot/outputs/vr_diagnostics/vr_only_test_01.jsonl
+
+
+  conda activate lerobot
+
+python - <<'PY'
+import json
+from collections import Counter
+from pathlib import Path
+
+path = Path(
+    "/home/robot/VLA/lerobot/outputs/vr_diagnostics/vr_only_test_01.jsonl"
+)
+rows = [
+    json.loads(line)
+    for line in path.read_text(encoding="utf-8").splitlines()
+    if line.strip()
+]
+
+print("总记录数:", len(rows))
+print("过滤原因:")
+for reason, count in Counter(r.get("guard_reason") for r in rows).most_common():
+    print(f"  {reason}: {count}")
+
+ages = [r["sample_age_s"] for r in rows if r.get("sample_age_s") is not None]
+print("最大 sample age:", max(ages, default=None))
+
+sequences = [r["diagnostics_record_sequence"] for r in rows]
+missing = sum(b - a - 1 for a, b in zip(sequences, sequences[1:]) if b > a + 1)
+print("诊断序号缺失数:", missing)
+PY
+
+# 台架测试
+conda activate lerobot
+
+cd /home/robot/VLA/lerobot
+
+python src/lerobot/scripts/lerobot_record.py \
+  --robot.type=a10_follower \
+  --robot.host=192.168.110.124 \
+  --robot.port=8080 \
+  --robot.timeout_ms=300000 \
+  --robot.use_ee_delta=true \
+  --teleop.type=xlevr \
+  --teleop.xlevr_path=/home/robot/VLA/XLeRobot/XLeVR \
+  --teleop.arm=right \
+  --teleop.position_control_mode=safe_frame_delta \
+  --teleop.control_fps=30 \
+  --teleop.require_squeeze_to_move=true \
+  --teleop.stale_timeout_s=0.25 \
+  --teleop.max_vr_speed_m_s=2.0 \
+  --teleop.spike_recovery_frames=2 \
+  --teleop.position_cutoff_hz=5.0 \
+  --teleop.max_linear_speed_m_s=0.10 \
+  --teleop.max_linear_accel_m_s2=0.4 \
+  --teleop.engage_ramp_s=0.35 \
+  --teleop.max_delta_pos_m=0.003 \
+  --teleop.max_delta_angle_deg=1.0 \
+  --teleop.record_vr_diagnostics=true \
+  --teleop.diagnostics_queue_size=2048 \
+  --teleop.diagnostics_flush_every=30 \
+  --dataset.root=/home/robot/VLA/lerobot/dataset/a10_vr_a13_bench_01 \
+  --dataset.repo_id=local/a10_vr_a13_bench_01 \
+  --dataset.single_task="A10 VR A1.3 bench validation" \
+  --dataset.fps=30 \
+  --dataset.episode_time_s=120 \
+  --dataset.reset_time_s=120 \
+  --dataset.num_episodes=3 \
+  --dataset.video=true \
+  --dataset.push_to_hub=false \
+  --resume=false \
+  --display_data=false \
+  --play_sounds=true

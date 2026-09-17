@@ -85,6 +85,8 @@
 - sections:
   - local: phone_teleop
     title: Phone
+  - local: xlevr_teleoperation_optimization
+    title: XLeVR Teleoperation Optimization
   title: "Teleoperators"
 - sections:
   - local: notebooks

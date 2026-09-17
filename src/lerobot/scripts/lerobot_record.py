@@ -62,8 +62,9 @@ import logging
 import os
 import signal
 import time
-from datetime import datetime
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 from pprint import pformat
 from typing import Any
@@ -90,6 +91,10 @@ from lerobot.processor import (
     RobotObservation,
     RobotProcessorPipeline,
     make_default_processors,
+)
+from lerobot.teleoperators.xlevr.diagnostics import (
+    XLeVRDiagnosticsWriter,
+    get_xlevr_diagnostics,
 )
 from lerobot.teleoperators.xlevr.factory import make_xlevr_a10_processors
 from lerobot.processor.rename_processor import rename_stats
@@ -266,6 +271,9 @@ def record_loop(
     control_time_s: int | None = None,
     single_task: str | None = None,
     display_data: bool = False,
+    diagnostics_writer: XLeVRDiagnosticsWriter | None = None,
+    diagnostics_phase: str = "unknown",
+    diagnostics_episode_index: int | None = None,
 ):
     if dataset is not None and dataset.fps != fps:
         raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
@@ -296,10 +304,17 @@ def record_loop(
         preprocessor.reset()
         postprocessor.reset()
 
+    # A stateful VR mapper must never carry an anchor/filter velocity across
+    # reset, recording, or re-recording boundaries.
+    teleop_action_processor.reset()
+    robot_action_processor.reset()
+    robot_observation_processor.reset()
+
     if control_time_s is None or control_time_s <= 0:
         control_time_s = float("inf")
 
     timestamp = 0
+    control_frame_index = 0
     start_episode_t = time.perf_counter()
     while timestamp < control_time_s:
         start_loop_t = time.perf_counter()
@@ -369,14 +384,31 @@ def record_loop(
             robot_action_to_send = robot_action_processor((act_processed_teleop, obs))
 
         # Send action to robot
-        # Action can eventually be clipped using `max_relative_target`,
-        # so action actually sent is saved in the dataset. action = postprocessor.process(action)
-        # TODO(steven, pepijn, adil): we should use a pipeline step to clip the action, so the sent action is the action that we input to the robot.
+        # Action can eventually be clipped using `max_relative_target`.
         _sent_action = robot.send_action(robot_action_to_send)
+        xlevr_diagnostics = get_xlevr_diagnostics(teleop_action_processor)
+        if xlevr_diagnostics is not None and isinstance(_sent_action, dict):
+            # A1.3: XLeVR training actions follow the Robot contract's actual sent action.
+            recorded_action = _sent_action
+        else:
+            # Preserve the existing schema/behavior of unrelated teleop and policy paths.
+            recorded_action = action_values
+
+        if diagnostics_writer is not None and xlevr_diagnostics is not None:
+            xlevr_diagnostics.update(
+                {
+                    "recording_phase": diagnostics_phase,
+                    "dataset_episode_index": diagnostics_episode_index,
+                    "control_frame_index": control_frame_index,
+                    "record_loop_elapsed_s": time.perf_counter() - start_episode_t,
+                    "sent_action": _sent_action,
+                }
+            )
+            diagnostics_writer.write(xlevr_diagnostics)
 
         # Write to dataset
         if dataset is not None:
-            action_frame = build_dataset_frame(dataset.features, action_values, prefix=ACTION)
+            action_frame = build_dataset_frame(dataset.features, recorded_action, prefix=ACTION)
             frame = {**observation_frame, **action_frame, "task": single_task}
             dataset.add_frame(frame)
 
@@ -387,6 +419,7 @@ def record_loop(
         precise_sleep(1 / fps - dt_s)
 
         timestamp = time.perf_counter() - start_episode_t
+        control_frame_index += 1
 
 
 def configure_signal_controls(events: dict) -> dict[int, Any]:
@@ -502,6 +535,25 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             },
         )
 
+    diagnostics_writer = None
+    if (
+        cfg.teleop is not None
+        and cfg.teleop.type == "xlevr"
+        and getattr(cfg.teleop, "record_vr_diagnostics", False)
+    ):
+        diagnostics_path = (
+            dataset.root
+            / "meta"
+            / "xlevr_diagnostics"
+            / f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
+        )
+        diagnostics_writer = XLeVRDiagnosticsWriter(
+            diagnostics_path,
+            queue_size=getattr(cfg.teleop, "diagnostics_queue_size", 2048),
+            flush_every=getattr(cfg.teleop, "diagnostics_flush_every", 30),
+        )
+        logging.info("XLeVR diagnostics: %s", diagnostics_path)
+
     robot.connect()
     if teleop is not None:
         teleop.connect()
@@ -509,7 +561,8 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
     listener, events = init_keyboard_listener()
     previous_signal_handlers = configure_signal_controls(events)
 
-    with VideoEncodingManager(dataset):
+    diagnostics_context = diagnostics_writer if diagnostics_writer is not None else nullcontext()
+    with diagnostics_context, VideoEncodingManager(dataset):
         if not events["stop_recording"]:
             log_say("Reset the environment", cfg.play_sounds)
             print(
@@ -528,6 +581,9 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 control_time_s=cfg.dataset.reset_time_s,
                 single_task=cfg.dataset.single_task,
                 display_data=cfg.display_data,
+                diagnostics_writer=diagnostics_writer,
+                diagnostics_phase="initial_reset",
+                diagnostics_episode_index=None,
             )
 
         recorded_episodes = 0
@@ -548,6 +604,9 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 control_time_s=cfg.dataset.episode_time_s,
                 single_task=cfg.dataset.single_task,
                 display_data=cfg.display_data,
+                diagnostics_writer=diagnostics_writer,
+                diagnostics_phase="recording",
+                diagnostics_episode_index=dataset.num_episodes,
             )
 
             # Execute a few seconds without recording to give time to manually reset the environment
@@ -567,6 +626,9 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     control_time_s=cfg.dataset.reset_time_s,
                     single_task=cfg.dataset.single_task,
                     display_data=cfg.display_data,
+                    diagnostics_writer=diagnostics_writer,
+                    diagnostics_phase="reset",
+                    diagnostics_episode_index=dataset.num_episodes,
                 )
 
             if events["rerecord_episode"]:
@@ -578,6 +640,15 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
 
             dataset.save_episode()
             recorded_episodes += 1
+
+    if diagnostics_writer is not None:
+        logging.info(
+            "XLeVR diagnostics closed: path=%s written=%d dropped=%d error=%s",
+            diagnostics_writer.path,
+            diagnostics_writer.records_written,
+            diagnostics_writer.dropped_records,
+            diagnostics_writer.error,
+        )
 
     log_say("Stop recording", cfg.play_sounds, blocking=True)
 
@@ -612,8 +683,9 @@ if __name__ == "__main__":
     # e.g. python src/lerobot/scripts/lerobot_record.py --dataset.repo_id=allen/my_neaw_id12.16
     defaults = [
         "--robot.type=a10_follower",
-        "--robot.host=192.168.1.6",
+        "--robot.host=192.168.110.124",
         "--robot.port=8080",
+        "--robot.timeout_ms=300000",
         "--robot.use_ee_delta=true",
         #"--teleop.type=a10_leader",
         "--teleop.type=xlevr",

@@ -24,6 +24,33 @@ class XLeVRTeleopConfig(TeleoperatorConfig):
 
     control_fps: int = 30
 
+    # A1.1 input-guard mode. Set to "legacy_frame_delta" only to recover the
+    # pre-A1 input behavior for comparison and rollback.
+    position_control_mode: str = "safe_frame_delta"
+    stale_timeout_s: float = 0.25
+    max_vr_speed_m_s: float = 2.0
+    spike_recovery_frames: int = 2
+
+    # A2.1 computes an anchored-pose command for diagnostics only. It does not
+    # change the current RobotAction or send the future SET_EE_ANCHOR protocol.
+    compute_anchor_shadow: bool = True
+
+    # Motion shaping belongs to the validated A10 ``vr_vel`` 500 Hz controller.
+    # ``lerobot_a1`` keeps the former A1.2 implementation as an explicit
+    # rollback/experiment mode; do not combine it with normal vr_vel shaping
+    # unless double filtering is intentionally being tested.
+    motion_shaping_mode: str = "robot_controller"
+    position_cutoff_hz: float = 5.0
+    max_linear_speed_m_s: float = 0.25
+    max_linear_accel_m_s2: float = 1.0
+    engage_ramp_s: float = 0.35
+
+    # A1.3 diagnostics are written as a JSONL sidecar by lerobot_record. They
+    # never become training action features and never enter the A10 wire payload.
+    record_vr_diagnostics: bool = True
+    diagnostics_queue_size: int = 2048
+    diagnostics_flush_every: int = 30
+
     pos_deadzone_m: float = 0.0005
     angle_deadzone_deg: float = 0.05
     max_delta_pos_m: float | None = None

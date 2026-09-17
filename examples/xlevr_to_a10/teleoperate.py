@@ -19,6 +19,10 @@ import time
 from lerobot.robots.a10_follower.a10_follower import A10Follower
 from lerobot.robots.a10_follower.config_a10_follower import A10FollowerConfig
 from lerobot.teleoperators.xlevr.config_xlevr import XLeVRTeleopConfig
+from lerobot.teleoperators.xlevr.diagnostics import (
+    XLeVRDiagnosticsWriter,
+    get_xlevr_diagnostics,
+)
 from lerobot.teleoperators.xlevr.factory import make_xlevr_a10_processors
 from lerobot.teleoperators.xlevr.teleop_xlevr import XLeVRTeleop
 from lerobot.utils.errors import DeviceNotConnectedError
@@ -49,6 +53,10 @@ def parse_args():
     parser.add_argument("--robot-timeout-ms", type=int, default=300000, help="机器人 TCP 连接超时")
     parser.add_argument("--xlevr-path", default=XLEVR_PATH)
     parser.add_argument("--fps", type=int, default=FPS)
+    parser.add_argument(
+        "--diagnostics-jsonl",
+        help="逐帧保存原始 VR、过滤原因、滤波/限幅值和最终命令",
+    )
     parser.add_argument(
         "--with-cameras",
         action="store_true",
@@ -134,6 +142,11 @@ def main():
     )
     teleop = XLeVRTeleop(teleop_config)
     teleop_action_processor, robot_action_processor, _ = make_xlevr_a10_processors(teleop_config)
+    diagnostics_writer = (
+        XLeVRDiagnosticsWriter(args.diagnostics_jsonl)
+        if args.diagnostics_jsonl
+        else None
+    )
 
     robot = None
     if not args.vr_only:
@@ -193,8 +206,6 @@ def main():
     next_reconnect_at = 0.0
     status_keys = (
         "ee.enabled",
-        "vr.button_squeeze",
-        "vr.trigger",
         "ee.delta_x",
         "ee.delta_y",
         "ee.delta_z",
@@ -210,6 +221,11 @@ def main():
         vr_status = teleop.get_status()
         has_right = vr_status.get("has_right_goal")
         summary = ", ".join(f"{k}={action.get(k)}" for k in status_keys if k in action)
+        buttons = raw_action.get("xlevr.buttons", {}) or {}
+        summary = (
+            f"squeeze={bool(buttons.get('squeeze', False))}, "
+            f"trigger={raw_action.get('xlevr.trigger', 0.0)}, {summary}"
+        )
         hint = ""
         if not has_right or not has_pos:
             hint = "  << 没有右手柄位姿。请在 VR 浏览器点 Enter VR，确认右手柄已配对；页面需强制刷新。"
@@ -249,10 +265,11 @@ def main():
             raw_action = teleop.get_action()
             ee_delta_action = teleop_action_processor((raw_action, obs))
             robot_action = robot_action_processor((ee_delta_action, obs))
+            sent_action = None
 
             if robot is not None and robot_link_ok:
                 try:
-                    robot.send_action(robot_action)
+                    sent_action = robot.send_action(robot_action)
                 except ROBOT_LINK_ERRORS as exc:
                     logging.warning("机器人连接断开（发动作）: %s", exc)
                     _safe_robot_disconnect(robot)
@@ -266,12 +283,27 @@ def main():
             elif robot is None and frame % args.print_every == 0:
                 _print_action_status("vr-only", robot_action)
 
+            if diagnostics_writer is not None:
+                diagnostics = get_xlevr_diagnostics(teleop_action_processor)
+                if diagnostics is not None:
+                    diagnostics.update(
+                        {
+                            "recording_phase": "vr_only" if robot is None else "teleoperate",
+                            "control_frame_index": frame,
+                            "computed_robot_action": robot_action,
+                            "sent_action": sent_action,
+                        }
+                    )
+                    diagnostics_writer.write(diagnostics)
+
             frame += 1
             dt = time.perf_counter() - start
             precise_sleep(1 / args.fps - dt)
     except KeyboardInterrupt:
         print("\nStopping...")
     finally:
+        if diagnostics_writer is not None:
+            diagnostics_writer.close()
         teleop.disconnect()
         if robot is not None and robot.is_connected:
             robot.disconnect()
