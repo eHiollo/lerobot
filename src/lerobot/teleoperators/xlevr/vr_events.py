@@ -57,5 +57,5 @@ class VREventHandler:
     def print_control_guide(self) -> None:
         logger.info(
             "VR recording controls (left thumbstick): "
-            "right=next episode, left=re-record, up=stop"
+            "right=next episode / start recording, left=re-record, up=stop"
         )

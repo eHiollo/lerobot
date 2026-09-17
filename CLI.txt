@@ -1,14 +1,28 @@
-  #数据录制
-    #下一轮
-    # kill -USR1 <pid>
-    # 重新录制
-    # kill -USR2 <pid>
-    # 停止录制
-    # kill -TERM <pid>
+  #数据录制（VR 遥操作，30Hz，SET_EE_DELTA）
+  # 先停掉 teleoperate.py，8443/8442 只能有一个 XLeVR
+  # 启动先进入 reset，不会马上 Recording；各阶段默认最多 10 分钟，靠按键提前切阶段
+  # 左手摇杆: 右=下一阶段/下一集  左=重录  上=停止放弃
+  # 或: kill -USR1 <pid> 下一集; kill -USR2 <pid> 重录; kill -TERM <pid> 停止
 
-    # 继续录制指令 (默认 30Hz)
-python src/lerobot/scripts/lerobot_record.py   --dataset.root=/home/allen/projects/lerobot/dataset/test_a10_20260402_164126   --dataset.repo_id=allen/test_a10_20260402_164126   --resume=true   --dataset.push_to_hub=false
+  # 新建数据集
+python src/lerobot/scripts/lerobot_record.py \
+  --robot.host=192.168.110.124 \
+  --robot.port=8080 \
+  --dataset.root=/home/robot/VLA/lerobot/dataset/a10_vr_9_11_3 \
+  --dataset.repo_id=local/a10_vr \
+  --dataset.single_task="pick_and_place" \
+  --dataset.push_to_hub=false
 
+  # 继续往同一份数据里录
+python src/lerobot/scripts/lerobot_record.py \
+  --robot.host=192.168.110.124 \
+  --robot.port=8080 \
+  --dataset.root=/home/robot/VLA/lerobot/dataset/a10_vr \
+  --dataset.repo_id=local/a10_vr \
+  --resume=true \ 
+  --dataset.push_to_hub=false
+
+resume 续录
 
   #检查摄像头
   lerobot-find-cameras opencv

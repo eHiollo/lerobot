@@ -148,12 +148,12 @@ class DatasetRecordConfig:
     root: str | Path | None = None
     # Limit the frames per second.
     fps: int = 30
-    # Number of seconds for data recording for each episode.
-    episode_time_s: int | float = 60
-    # Number of seconds for resetting the environment after each episode.
-    reset_time_s: int | float = 60
-    # Number of episodes to record.
-    num_episodes: int = 50
+    # Seconds per episode. 0 / None = no time limit; otherwise a safety cap (default 10 min).
+    episode_time_s: int | float | None = 600
+    # Seconds for environment reset. 0 / None = no time limit; otherwise a safety cap (default 10 min).
+    reset_time_s: int | float | None = 600
+    # Upper bound on episodes; stop early with left stick up / SIGTERM.
+    num_episodes: int = 1000
     # Encode frames in the dataset into video
     video: bool = True
     # Upload dataset to Hugging Face hub.
@@ -296,20 +296,23 @@ def record_loop(
         preprocessor.reset()
         postprocessor.reset()
 
+    if control_time_s is None or control_time_s <= 0:
+        control_time_s = float("inf")
+
     timestamp = 0
     start_episode_t = time.perf_counter()
     while timestamp < control_time_s:
         start_loop_t = time.perf_counter()
-
-        if events["exit_early"]:
-            events["exit_early"] = False
-            break
 
         if isinstance(teleop, Teleoperator) and hasattr(teleop, "get_vr_events"):
             vr_events = teleop.get_vr_events()
             for key, value in vr_events.items():
                 if value:
                     events[key] = True
+
+        if events["exit_early"]:
+            events["exit_early"] = False
+            break
 
         # Get robot observation
         obs = robot.get_observation()
@@ -507,6 +510,26 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
     previous_signal_handlers = configure_signal_controls(events)
 
     with VideoEncodingManager(dataset):
+        if not events["stop_recording"]:
+            log_say("Reset the environment", cfg.play_sounds)
+            print(
+                "先 reset（默认最多 10 分钟）：摆好场景后，左手摇杆右 / kill -USR1 开始第 1 集。"
+                " 之后各阶段同样靠按键：右=下一阶段，左=重录，上=放弃。",
+                flush=True,
+            )
+            record_loop(
+                robot=robot,
+                events=events,
+                fps=cfg.dataset.fps,
+                teleop_action_processor=teleop_action_processor,
+                robot_action_processor=robot_action_processor,
+                robot_observation_processor=robot_observation_processor,
+                teleop=teleop,
+                control_time_s=cfg.dataset.reset_time_s,
+                single_task=cfg.dataset.single_task,
+                display_data=cfg.display_data,
+            )
+
         recorded_episodes = 0
         while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
             log_say(f"Recording episode {dataset.num_episodes}", cfg.play_sounds)
@@ -600,6 +623,9 @@ if __name__ == "__main__":
         "--dataset.single_task=test_a10",
         "--display_data=False",    
         "--dataset.fps=30",
+        "--dataset.episode_time_s=600",
+        "--dataset.reset_time_s=600",
+        "--dataset.num_episodes=1000",
         "--dataset.push_to_hub=False",
      ]
     sys.argv = [sys.argv[0]] + defaults + sys.argv[1:]

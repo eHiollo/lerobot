@@ -463,9 +463,7 @@ def concatenate_video_files(
             stream_map[input_stream.index] = output_container.add_stream_from_template(
                 template=input_stream, opaque=True
             )
-
-            # set the time base to the input stream time base (missing in the codec context)
-            stream_map[input_stream.index].time_base = input_stream.time_base
+            # PyAV <15: this stream is decoder-backed; setting time_base crashes.
 
     # Demux + remux packets (no re-encode)
     for packet in input_container.demux():
