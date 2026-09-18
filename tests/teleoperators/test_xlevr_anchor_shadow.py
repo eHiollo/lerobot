@@ -69,6 +69,7 @@ def test_shadow_offset_is_absolute_and_does_not_change_current_action():
     for action in samples:
         shadow_output = shadow.action(copy.deepcopy(action))
         baseline_output = baseline.action(copy.deepcopy(action))
+        anchor_command = shadow_output.pop("_xlevr.anchor_command")
         assert shadow_output == baseline_output
 
     diagnostics = shadow.get_last_diagnostics()
@@ -76,8 +77,12 @@ def test_shadow_offset_is_absolute_and_does_not_change_current_action():
         diagnostics["anchor_shadow_translation_ee_m"], [0.0, 0.03, 0.0]
     )
     np.testing.assert_allclose(translation(shadow_output), [0.0, 0.02, 0.0])
-    assert diagnostics["anchor_shadow_transmitted"] is False
+    assert diagnostics["anchor_shadow_transmitted"] is True
     assert diagnostics["anchor_shadow_protocol"] == "SET_EE_ANCHOR/v1"
+    assert anchor_command["active"] is True
+    assert anchor_command["anchor_id"] == diagnostics["anchor_shadow_id"]
+    assert anchor_command["sample_sequence"] == 4
+    np.testing.assert_allclose(anchor_command["offset"], diagnostics["anchor_shadow_offset_6d"])
 
 
 def test_duplicate_sequence_does_not_advance_shadow_offset():

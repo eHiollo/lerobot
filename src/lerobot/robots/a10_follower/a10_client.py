@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import socket
 import threading
 from typing import Dict, Iterable, List
@@ -269,6 +270,45 @@ class A10TCPClient:
             payload = json.dumps({"actions": [float(v) for v in actions]})
             cmd = f"SET_EE_DELTA {payload}"
             self._send_line(cmd)
+
+    def send_ee_anchor(self, command: dict) -> None:
+        """Send the A2.2 diagnostic-only anchored-pose command."""
+        session_id = command.get("session_id")
+        anchor_id = command.get("anchor_id")
+        sample_sequence = command.get("sample_sequence")
+        offset = command.get("offset")
+        gripper = command.get("gripper")
+        active = command.get("active")
+        if not isinstance(active, bool):
+            raise ValueError("SET_EE_ANCHOR active must be boolean")
+        if not isinstance(session_id, str) or not session_id:
+            raise ValueError("SET_EE_ANCHOR requires a non-empty session_id")
+        if type(anchor_id) is not int or anchor_id < 0:
+            raise ValueError("SET_EE_ANCHOR anchor_id must be a non-negative integer")
+        if type(sample_sequence) is not int or sample_sequence < 0:
+            raise ValueError("SET_EE_ANCHOR sample_sequence must be a non-negative integer")
+        if not isinstance(offset, (list, tuple)) or len(offset) != 6:
+            raise ValueError("SET_EE_ANCHOR offset must contain 6 numbers")
+        numeric_offset = [float(value) for value in offset]
+        numeric_gripper = float(gripper)
+        if not all(math.isfinite(value) for value in (*numeric_offset, numeric_gripper)):
+            raise ValueError("SET_EE_ANCHOR offset/gripper values must be finite")
+
+        payload = json.dumps(
+            {
+                "active": active,
+                "session_id": session_id,
+                "anchor_id": anchor_id,
+                "sample_sequence": sample_sequence,
+                "offset": numeric_offset,
+                "gripper": numeric_gripper,
+            },
+            separators=(",", ":"),
+        )
+        with self.tx_lock:
+            if not self.is_connected:
+                raise ConnectionError("A10TCPBus is not connected")
+            self._send_line(f"SET_EE_ANCHOR {payload}")
 
 
     # ---------- Feetech 风格 API：read / sync_read ----------

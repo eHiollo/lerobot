@@ -16,6 +16,8 @@ class A10FollowerConfig(RobotConfig):
     timeout_ms: int = 5000
     # When True, send_action accepts ee.delta_* and forwards SET_EE_DELTA to controller
     use_ee_delta: bool = True
+    # A2.2 sends the mapper sideband to A10 for diagnostics only.
+    send_ee_anchor_shadow: bool = True
 
     # 默认相机配置，可以被命令行覆盖
     cameras: Dict[str, CameraConfig] = field(

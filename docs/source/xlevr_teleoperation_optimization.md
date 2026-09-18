@@ -893,9 +893,9 @@ git diff -- src/lerobot/teleoperators/xlevr \
 - 兼容：下行仍为 7 维 `SET_EE_DELTA`，A10 接收端与训练 action schema 无需修改。
 - 验证：XLeVR 状态机、诊断、A1.2 回退及坐标映射共 22 项测试通过；`git diff --check` 通过。
 
-## 15. A2 锚点闭环（A2.0/A2.1 已完成）
+## 15. A2 锚点闭环（A2.0/A2.1/A2.2 代码已完成）
 
-本节与前面的 A1 开发记录分开。当前只完成 LeRobot 侧契约和影子计算；现有控制模式与旧协议保持不变。
+本节与前面的 A1 开发记录分开。当前已完成 LeRobot 影子计算和 A10 影子接收；现有控制模式与旧协议保持不变。
 
 ### 15.1 控制职责
 
@@ -909,7 +909,7 @@ LeRobot 不实现 A10 FK/IK；A10 不解释 WebXR 原始坐标；A1.2 继续默�
 ### 15.2 最小方案
 
 - LeRobot 新增 `anchored_pose` 模式，按下时记录 human anchor，之后输出相对锚点的绝对六维 offset。
-- A2.2 计划新增 `SET_EE_ANCHOR`；A2.1 **仅写诊断，不发送该命令**。
+- A2.1 仅写诊断；A2.2 已通过 sideband 发送 `SET_EE_ANCHOR`，并在写入数据集前移除该内部字段。
 - A10 在新 `anchor_id` 首帧用实际 FK 保存 robot anchor，并计算 `user_target_pm = robot_anchor_pm * offset_pm`。
 - A10 新增 `user_target_pm` 和 `robot_anchor_pm`；复用 `target_pm` 作为受限 reference，原 `command_pm`、P 控制、限速、slew 和 IK 不变。
 - 松开、stale、跳点或 fault 时废弃双锚点，不执行尚未完成的追赶路径。
@@ -950,14 +950,14 @@ rotation_ee    = axis_remap(log(inv(anchor_quat) * quat_now) * frozen_angle_scal
 
 1. **A2.0 契约（已完成）**：已确定协议字段、单位、坐标系、重锚和失效语义。
 2. **A2.1 影子计算（已完成）**：LeRobot 计算并记录 anchor offset，仍发送旧命令。
-3. **A2.2 协议联调**：A10 接收新命令并记录 robot/user target，暂不驱动电机。
+3. **A2.2 影子联调（代码已完成）**：LeRobot 发送新协议，A10 记录 robot/user target，不驱动电机；真实 TCP/实机日志待验证。
 4. **A2.3 A10 闭环**：加入 reference governor 和 tracking error 冻结/故障策略，复用原控制链。
 5. **A2.4 低速台架**：低速、无负载、可急停条件下验收，再决定是否切换默认模式。
 
 ### 15.4 主要修改文件
 
-- LeRobot：`config_xlevr.py`、`xlevr_processor.py`、`a10_follower.py`、`a10_client.py`及对应测试。
-- A10：`a10_tcp_server.hpp/.cpp`、`a10_vr_vel_plan.cpp`及对应测试/诊断。
+- LeRobot：`xlevr_processor.py`、`config_a10_follower.py`、`a10_follower.py`、`a10_client.py`及对应测试。
+- A10：`a10_anchor_protocol.hpp/.cpp`、`a10_tcp_server.hpp/.cpp`、`a10_vr_vel_plan.cpp`及对应测试。
 - 不修改 XLeRobot WebXR、A10 FK/IK 模型、旧 `SET_EE_DELTA` 和夹爪控制。
 
 ### 15.5 验收重点
@@ -975,4 +975,15 @@ rotation_ee    = axis_remap(log(inv(anchor_quat) * quat_now) * frozen_angle_scal
 - 文件：`config_xlevr.py`、`factory.py`、`xlevr_processor.py`、`test_xlevr_anchor_shadow.py` 和本文档。
 - 验证：锚点绝对偏移、动作输出不变、重复帧不推进、松开重锚、scale 冻结、姿态轴映射和跳点重锚均已覆盖；A1/A2.1 定向回归 `28 passed`，整个 `tests/teleoperators` 回归 `41 passed`。
 
-下一步测试方案：先用 `--teleop.compute_anchor_shadow=true` 录制 VR-only/实机 JSONL，对比 `anchor_shadow_offset_6d` 与原逐帧 delta 累积趋势，并验证松开、重复帧、stale 和跳点后的 offset 归零重锚；确认诊断无误后再进入 A2.2，届时才需要修改 A10 接收端。
+A2.1 实机验证仍建议录制 JSONL，对比 `anchor_shadow_offset_6d`，并检查松开、重复帧、stale 和跳点后的归零重锚。
+
+### 15.7 A2.2 开发记录（2026-09-18）
+
+- 分支：LeRobot 和 A10_new 均为 `kaanh_vr_op`，原 `kaanh` 未修改。
+- 发送：mapper 附加内部 anchor sideband；A10 follower 先发 `SET_EE_ANCHOR`、再走原 `SET_EE_DELTA`，并在返回 action 前移除 sideband，数据集 schema 不变。
+- 接收：A10 严格解析新协议并用 mailbox 传给 `vr_vel`；新锚点保存当前 FK 为 `robot_anchor_pm`，计算 `user_target_pm = robot_anchor_pm * offset_pm`。
+- 边界：仅保存并周期打印影子目标；不写 `target_pm`、`command_pm`，不调用 IK/电机或夹爪，原 `SET_EE_DELTA` 路径不变。
+- 测试：LeRobot 定向回归 `49 passed`；A10 协议单测通过，TCP 源文件语法检查通过。
+- 限制：本机缺少 `kaanhbotConfig.cmake`，A10 完整工程 CMake 未能配置；真实 TCP/实机影子日志尚未联调。
+
+A2.2 剩余工作仅为安全影子联调：确认 `robot_xyz/user_xyz` 日志正确，且机器人运动仍只由旧 `SET_EE_DELTA` 驱动；本轮不进入 A2.3。

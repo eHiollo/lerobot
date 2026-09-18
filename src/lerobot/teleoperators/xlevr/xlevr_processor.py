@@ -109,6 +109,7 @@ class XLeVRDeltaEEMapper(RobotActionProcessorStep):
     _anchor_shadow_last_rotation_ee_rad: np.ndarray | None = field(
         default=None, init=False, repr=False
     )
+    _anchor_shadow_last_transport_sequence: int = field(default=0, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.position_control_mode not in {"safe_frame_delta", "legacy_frame_delta"}:
@@ -432,6 +433,22 @@ class XLeVRDeltaEEMapper(RobotActionProcessorStep):
             }
         )
 
+    def _attach_anchor_shadow_command(self, output: RobotAction) -> None:
+        if not self.compute_anchor_shadow or self.position_control_mode != "safe_frame_delta":
+            return
+        offset = self._current_diagnostics.get("anchor_shadow_offset_6d")
+        if not self._anchor_shadow_active or offset is None:
+            offset = [0.0] * 6
+        output["_xlevr.anchor_command"] = {
+            "active": self._anchor_shadow_active,
+            "session_id": self._anchor_shadow_session_id,
+            "anchor_id": self._anchor_shadow_id,
+            "sample_sequence": self._anchor_shadow_last_transport_sequence,
+            "offset": [float(value) for value in offset],
+            "gripper": float(output.get("gripper.pos", 0.0)),
+        }
+        self._current_diagnostics["anchor_shadow_transmitted"] = True
+
     def _orientation_delta_rotvec(
         self,
         orientation_quat,
@@ -459,6 +476,7 @@ class XLeVRDeltaEEMapper(RobotActionProcessorStep):
             output = self._legacy_action(action)
         else:
             output = self._safe_action(action)
+            self._attach_anchor_shadow_command(output)
         self._finish_diagnostics(output)
         return output
 
@@ -606,6 +624,9 @@ class XLeVRDeltaEEMapper(RobotActionProcessorStep):
             self._deactivate("FAULT")
             self._mark_diagnostics("invalid_sample")
             return self._disabled_arm_action(gripper, trigger, thumbstick, buttons)
+        self._anchor_shadow_last_transport_sequence = max(
+            self._anchor_shadow_last_transport_sequence, sample_sequence
+        )
         if sample_age_s > self.stale_timeout_s:
             self._deactivate("STALE")
             self._mark_diagnostics("stale_age")
