@@ -8,7 +8,7 @@
 python src/lerobot/scripts/lerobot_record.py \
   --robot.host=192.168.110.124 \
   --robot.port=8080 \
-  --dataset.root=/home/robot/VLA/lerobot/dataset/a10_vr_9_17_2\
+  --dataset.root=/home/robot/VLA/lerobot/dataset/a10_vr_9_18_12\
   --dataset.repo_id=local/a10_vr \
   --dataset.single_task="pick_and_place" \
   --dataset.push_to_hub=false
@@ -17,7 +17,7 @@ python src/lerobot/scripts/lerobot_record.py \
 python src/lerobot/scripts/lerobot_record.py \
   --robot.host=192.168.110.124 \
   --robot.port=8080 \
-  --dataset.root=/home/robot/VLA/lerobot/dataset/a10_vr_9_17_1 \
+  --dataset.root=/home/robot/VLA/lerobot/dataset/a10_vr_9_18_10\
   --dataset.repo_id=local/a10_vr \
   --resume=true \ 
   --dataset.push_to_hub=false

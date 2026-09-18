@@ -22,7 +22,7 @@ class A10FollowerConfig(RobotConfig):
     # 默认相机配置，可以被命令行覆盖
     cameras: Dict[str, CameraConfig] = field(
         default_factory=lambda: {
-            #"base_0_rgb": OpenCVCameraConfig(index_or_path=2, fps=30, width=640, height=480),
+            "base_0_rgb": OpenCVCameraConfig(index_or_path=2, fps=30, width=640, height=480),
             "right_wrist_0_rgb": OpenCVCameraConfig(index_or_path=0, fps=30, width=640, height=480,rotation=Cv2Rotation.ROTATE_180),
         }
     )

@@ -893,9 +893,9 @@ git diff -- src/lerobot/teleoperators/xlevr \
 - 兼容：下行仍为 7 维 `SET_EE_DELTA`，A10 接收端与训练 action schema 无需修改。
 - 验证：XLeVR 状态机、诊断、A1.2 回退及坐标映射共 22 项测试通过；`git diff --check` 通过。
 
-## 15. A2 锚点闭环（A2.0/A2.1/A2.2 代码已完成）
+## 15. A2 锚点闭环（A2.0～A2.3 代码已完成）
 
-本节与前面的 A1 开发记录分开。当前已完成 LeRobot 影子计算和 A10 影子接收；现有控制模式与旧协议保持不变。
+本节与前面的 A1 开发记录分开。A2.3 已完成离线开发，但默认关闭；A2.4 台架通过前仍使用旧控制模式。
 
 ### 15.1 控制职责
 
@@ -951,7 +951,7 @@ rotation_ee    = axis_remap(log(inv(anchor_quat) * quat_now) * frozen_angle_scal
 1. **A2.0 契约（已完成）**：已确定协议字段、单位、坐标系、重锚和失效语义。
 2. **A2.1 影子计算（已完成）**：LeRobot 计算并记录 anchor offset，仍发送旧命令。
 3. **A2.2 影子联调（代码已完成）**：LeRobot 发送新协议，A10 记录 robot/user target，不驱动电机；真实 TCP/实机日志待验证。
-4. **A2.3 A10 闭环**：加入 reference governor 和 tracking error 冻结/故障策略，复用原控制链。
+4. **A2.3 A10 闭环（代码已完成）**：加入 reference governor 和 tracking error 冻结/故障策略，默认关闭，复用原控制链。
 5. **A2.4 低速台架**：低速、无负载、可急停条件下验收，再决定是否切换默认模式。
 
 ### 15.4 主要修改文件
@@ -986,4 +986,15 @@ A2.1 实机验证仍建议录制 JSONL，对比 `anchor_shadow_offset_6d`，并�
 - 测试：LeRobot 定向回归 `49 passed`；A10 协议单测通过，TCP 源文件语法检查通过。
 - 限制：本机缺少 `kaanhbotConfig.cmake`，A10 完整工程 CMake 未能配置；真实 TCP/实机影子日志尚未联调。
 
-A2.2 剩余工作仅为安全影子联调：确认 `robot_xyz/user_xyz` 日志正确，且机器人运动仍只由旧 `SET_EE_DELTA` 驱动；本轮不进入 A2.3。
+A2.2 的实机影子日志仍需在 A2.4 前确认：`robot_xyz/user_xyz` 正确，且影子模式下机器人仍只由旧 `SET_EE_DELTA` 驱动。
+
+### 15.8 A2.3 开发记录（2026-09-18）
+
+- 分支：LeRobot 和 A10_new 均为 `kaanh_vr_op`；LeRobot 仅更新本文档，控制实现位于 A10。
+- 模式：`anchor_control=0` 默认保持旧 `SET_EE_DELTA`；设为 `1` 后，前六维 delta 不再驱动机械臂，夹爪仍沿用原通道。
+- 控制：`user_target_pm` 经平移/旋转 reference governor 写入 `target_pm`，复用原 P 控制、速度/加速度限制、slew、`command_pm`、IK 和电机链。
+- 安全：短时 tracking error 超限冻结 reference；持续超限、锚点超时、序号回退或连续 IK 失败进入 fault，立即对齐实际 FK 并要求松开/重锚。
+- 参数：`ref_vmax=0.06`、`ref_wmax=0.25`、`track_pos=0.05`、`track_rot=0.35`、`track_fault_cycles=50`、`anchor_timeout=0.25`、`ik_fault_cycles=5`；均需 A2.4 低速台架标定。
+- 数据：action schema 仍为原 `ee.delta_*`；锚点控制数据必须使用新的 dataset root/repo_id，不得续录到旧控制模式数据集。
+- 验证：协议/governor 单测及 ASan/UBSan 通过，覆盖平移/旋转限速、冻结恢复、持续超限 fault 和重锚清积压；A10 TCP 语法检查、LeRobot `49 passed` 与 `git diff --check` 均通过。
+- 限制：本机缺少 `kaanhbotConfig.cmake`，完整 A10 工程尚未构建；A2.2 实机影子验证和 A2.4 低速台架均未执行，因此不得设为默认模式。
