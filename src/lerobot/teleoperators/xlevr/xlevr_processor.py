@@ -471,12 +471,14 @@ class XLeVRDeltaEEMapper(RobotActionProcessorStep):
         return rx, ry, rz
 
     def action(self, action: RobotAction) -> RobotAction:
+        reset_arm = bool(action.pop("xlevr.reset_arm", False))
         self._begin_diagnostics(action)
         if self.position_control_mode == "legacy_frame_delta":
             output = self._legacy_action(action)
         else:
             output = self._safe_action(action)
             self._attach_anchor_shadow_command(output)
+        output["_xlevr.reset_arm"] = reset_arm
         self._finish_diagnostics(output)
         return output
 

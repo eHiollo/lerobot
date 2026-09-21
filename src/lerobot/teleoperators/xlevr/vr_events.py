@@ -12,7 +12,8 @@ class VREventHandler:
     Left thumbstick:
       - right  -> exit current episode early
       - left   -> re-record episode
-      - up     -> stop recording
+      - down   -> stop recording
+      - up     -> A10 vr_vel reset / home
     """
 
     def __init__(self, vr_monitor, threshold: float = 0.7):
@@ -22,6 +23,7 @@ class VREventHandler:
             "exit_early": False,
             "rerecord_episode": False,
             "stop_recording": False,
+            "reset_arm": False,
         }
         self._prev = {"x": 0.0, "y": 0.0}
 
@@ -43,19 +45,28 @@ class VREventHandler:
             self.events["rerecord_episode"] = True
             self.events["exit_early"] = True
         if y > self.threshold and self._prev["y"] <= self.threshold:
-            logger.info("VR left thumbstick up -> stop_recording")
+            logger.info("VR left thumbstick down -> stop_recording")
             self.events["stop_recording"] = True
             self.events["exit_early"] = True
+        elif y < -self.threshold and self._prev["y"] >= -self.threshold:
+            logger.info("VR left thumbstick up -> reset_arm")
+            self.events["reset_arm"] = True
 
         self._prev = {"x": x, "y": y}
         return self.events.copy()
 
     def reset_events(self) -> None:
         for key in self.events:
-            self.events[key] = False
+            if key != "reset_arm":
+                self.events[key] = False
+
+    def take_reset_arm(self) -> bool:
+        flag = bool(self.events.get("reset_arm", False))
+        self.events["reset_arm"] = False
+        return flag
 
     def print_control_guide(self) -> None:
         logger.info(
             "VR recording controls (left thumbstick): "
-            "right=next episode / start recording, left=re-record, up=stop"
+            "right=next episode / start recording, left=re-record, down=stop, up=reset arm"
         )

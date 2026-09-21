@@ -97,6 +97,12 @@ from lerobot.teleoperators.xlevr.diagnostics import (
     get_xlevr_diagnostics,
 )
 from lerobot.teleoperators.xlevr.factory import make_xlevr_a10_processors
+from lerobot.teleoperators.xlevr.hud import (
+    display_episode,
+    hud_phase_from_record,
+    push_record_hud,
+    remaining_seconds,
+)
 from lerobot.processor.rename_processor import rename_stats
 from lerobot.robots import (  # noqa: F401
     Robot,
@@ -274,6 +280,7 @@ def record_loop(
     diagnostics_writer: XLeVRDiagnosticsWriter | None = None,
     diagnostics_phase: str = "unknown",
     diagnostics_episode_index: int | None = None,
+    hud_num_episodes: int | None = None,
 ):
     if dataset is not None and dataset.fps != fps:
         raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
@@ -316,18 +323,32 @@ def record_loop(
     timestamp = 0
     control_frame_index = 0
     start_episode_t = time.perf_counter()
+    last_hud_t = -1.0
+    hud_episode = display_episode(diagnostics_episode_index)
+    hud_phase = hud_phase_from_record(diagnostics_phase, bool(events.get("rerecord_episode")))
     while timestamp < control_time_s:
         start_loop_t = time.perf_counter()
 
         if isinstance(teleop, Teleoperator) and hasattr(teleop, "get_vr_events"):
             vr_events = teleop.get_vr_events()
             for key, value in vr_events.items():
-                if value:
+                if value and key != "reset_arm":
                     events[key] = True
 
         if events["exit_early"]:
             events["exit_early"] = False
             break
+
+        now_hud = time.perf_counter()
+        if last_hud_t < 0.0 or now_hud - last_hud_t >= 1.0:
+            push_record_hud(
+                teleop,
+                phase=hud_phase,
+                episode=hud_episode,
+                num_episodes=hud_num_episodes,
+                remaining_s=remaining_seconds(control_time_s, timestamp),
+            )
+            last_hud_t = now_hud
 
         # Get robot observation
         obs = robot.get_observation()
@@ -567,8 +588,14 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             log_say("Reset the environment", cfg.play_sounds)
             print(
                 "先 reset（默认最多 10 分钟）：摆好场景后，左手摇杆右 / kill -USR1 开始第 1 集。"
-                " 之后各阶段同样靠按键：右=下一阶段，左=重录，上=放弃。",
+                " 之后各阶段同样靠按键：右=下一阶段，左=重录，上=机械臂复位，下=停止录制。",
                 flush=True,
+            )
+            push_record_hud(
+                teleop,
+                phase="reset",
+                episode=1,
+                num_episodes=cfg.dataset.num_episodes,
             )
             record_loop(
                 robot=robot,
@@ -584,11 +611,19 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 diagnostics_writer=diagnostics_writer,
                 diagnostics_phase="initial_reset",
                 diagnostics_episode_index=None,
+                hud_num_episodes=cfg.dataset.num_episodes,
             )
 
         recorded_episodes = 0
         while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
             log_say(f"Recording episode {dataset.num_episodes}", cfg.play_sounds)
+            push_record_hud(
+                teleop,
+                phase="recording",
+                episode=display_episode(dataset.num_episodes),
+                num_episodes=cfg.dataset.num_episodes,
+                remaining_s=remaining_seconds(cfg.dataset.episode_time_s, 0.0),
+            )
             record_loop(
                 robot=robot,
                 events=events,
@@ -607,6 +642,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 diagnostics_writer=diagnostics_writer,
                 diagnostics_phase="recording",
                 diagnostics_episode_index=dataset.num_episodes,
+                hud_num_episodes=cfg.dataset.num_episodes,
             )
 
             # Execute a few seconds without recording to give time to manually reset the environment
@@ -615,6 +651,12 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 (recorded_episodes < cfg.dataset.num_episodes - 1) or events["rerecord_episode"]
             ):
                 log_say("Reset the environment", cfg.play_sounds)
+                push_record_hud(
+                    teleop,
+                    phase=hud_phase_from_record("reset", events["rerecord_episode"]),
+                    episode=display_episode(dataset.num_episodes),
+                    num_episodes=cfg.dataset.num_episodes,
+                )
                 record_loop(
                     robot=robot,
                     events=events,
@@ -629,10 +671,17 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     diagnostics_writer=diagnostics_writer,
                     diagnostics_phase="reset",
                     diagnostics_episode_index=dataset.num_episodes,
+                    hud_num_episodes=cfg.dataset.num_episodes,
                 )
 
             if events["rerecord_episode"]:
                 log_say("Re-record episode", cfg.play_sounds)
+                push_record_hud(
+                    teleop,
+                    phase="rerecord",
+                    episode=display_episode(dataset.num_episodes),
+                    num_episodes=cfg.dataset.num_episodes,
+                )
                 events["rerecord_episode"] = False
                 events["exit_early"] = False
                 dataset.clear_episode_buffer()
@@ -651,6 +700,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         )
 
     log_say("Stop recording", cfg.play_sounds, blocking=True)
+    push_record_hud(teleop, phase="stop")
 
     robot.disconnect()
     if teleop is not None:

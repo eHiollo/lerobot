@@ -199,7 +199,8 @@ def main():
             print(f"已连接机器人，@ {args.fps}Hz 发送 SET_EE_DELTA actions。")
 
     print("XLeVR 遥操作运行中，Ctrl+C 停止。")
-    print("右手 squeeze=粗调 | 前扳机=精调(无需 squeeze) | 摇杆 x=夹爪 | 左手摇杆=record.py 事件")
+    print("右手 squeeze=粗调 | 前扳机=精调(无需 squeeze) | 摇杆 x=夹爪")
+    print("左手摇杆：右=下一阶段，左=重录，上=机械臂复位，下=停止录制")
     print("未按 squeeze/扳机时机械臂不会动；下方每秒打印 enabled / squeeze / delta。")
     frame = 0
     robot_link_ok = robot is not None and robot.is_connected

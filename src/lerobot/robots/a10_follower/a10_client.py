@@ -310,6 +310,12 @@ class A10TCPClient:
                 raise ConnectionError("A10TCPBus is not connected")
             self._send_line(f"SET_EE_ANCHOR {payload}")
 
+    def send_reset(self) -> None:
+        """Ask running vr_vel to home, same as the controller Shell command ``reset``."""
+        with self.tx_lock:
+            if not self.is_connected:
+                raise ConnectionError("A10TCPBus is not connected")
+            self._send_line("RESET")
 
     # ---------- Feetech 风格 API：read / sync_read ----------
 

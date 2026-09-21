@@ -58,6 +58,7 @@ class XLeVRTeleop(Teleoperator):
             "xlevr.sample_age_s": float,
             "xlevr.sample_sequence": int,
             "xlevr.source_timestamp": float,
+            "xlevr.reset_arm": bool,
         }
 
     @property
@@ -141,7 +142,8 @@ class XLeVRTeleop(Teleoperator):
         print(
             f"[XLeVR] Teleoperator 已连接，等待 VR 浏览器...\n"
             f"  打开: https://{host}:{https_port}\n"
-            f"  按住右手 squeeze 才控制机械臂，右手摇杆 x 直接控制夹爪",
+            f"  按住右手 squeeze 才控制机械臂，右手摇杆 x 直接控制夹爪\n"
+            f"  左手摇杆：右=下一阶段，左=重录，上=机械臂复位，下=停止录制",
             flush=True,
         )
         logger.info("XLeVR ready. Open https://%s:%s in your VR browser.", host, https_port)
@@ -164,13 +166,22 @@ class XLeVRTeleop(Teleoperator):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
+        reset_arm = False
+        if self._vr_event_handler is not None:
+            self._vr_event_handler.update_events()
+            reset_arm = self._vr_event_handler.take_reset_arm()
+
         goal = self._vr_monitor.get_latest_goal_nowait(self.config.arm)
         if goal is None:
-            return self._idle_action()
+            idle = self._idle_action()
+            idle["xlevr.reset_arm"] = reset_arm
+            return idle
 
         metadata = goal.metadata or {}
         if metadata.get("reset_target_to_current") and goal.target_position is None:
-            return self._idle_action()
+            idle = self._idle_action()
+            idle["xlevr.reset_arm"] = reset_arm
+            return idle
 
         try:
             trigger = float(metadata.get("trigger", 0.0))
@@ -224,6 +235,7 @@ class XLeVRTeleop(Teleoperator):
             "xlevr.sample_age_s": sample_age_s,
             "xlevr.sample_sequence": sample_sequence,
             "xlevr.source_timestamp": source_timestamp,
+            "xlevr.reset_arm": reset_arm,
         }
 
     def get_vr_events(self) -> dict[str, bool]:
@@ -232,11 +244,17 @@ class XLeVRTeleop(Teleoperator):
                 "exit_early": False,
                 "rerecord_episode": False,
                 "stop_recording": False,
+                "reset_arm": False,
             }
         events = self._vr_event_handler.update_events()
         if events.get("exit_early") or events.get("rerecord_episode") or events.get("stop_recording"):
             self._vr_event_handler.reset_events()
         return events
+
+    def send_hud(self, payload: dict[str, Any]) -> None:
+        if not self._connected or self._vr_monitor is None:
+            return
+        self._vr_monitor.send_hud(payload)
 
     def _idle_action(self, enabled: bool = False) -> dict[str, Any]:
         return {
@@ -251,6 +269,7 @@ class XLeVRTeleop(Teleoperator):
             "xlevr.sample_age_s": -1.0,
             "xlevr.sample_sequence": -1,
             "xlevr.source_timestamp": -1.0,
+            "xlevr.reset_arm": False,
         }
 
     def send_feedback(self, feedback: dict[str, float]) -> None:

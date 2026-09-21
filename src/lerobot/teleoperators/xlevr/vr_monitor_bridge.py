@@ -126,6 +126,8 @@ class SimpleAPIHandler(http.server.BaseHTTPRequestHandler):
                     content = file_obj.read()
                 self.send_response(200)
                 self.send_header("Content-Type", content_type)
+                if content_type in ("text/html", "application/javascript", "text/css"):
+                    self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 self.wfile.write(content)
             else:
@@ -188,6 +190,7 @@ class VRMonitorBridge:
         self._pose_sequence = 0
         self.servers_started = False
         self.startup_error: BaseException | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     def initialize(self) -> bool:
         if not Path(self.xlevr_path).exists():
@@ -240,6 +243,7 @@ class VRMonitorBridge:
 
             self.is_running = True
             self.servers_started = True
+            self._loop = asyncio.get_running_loop()
 
             host_display = get_local_ip() if self.config.host_ip == "0.0.0.0" else self.config.host_ip
             ws_port = self.config.websocket_port
@@ -403,8 +407,20 @@ class VRMonitorBridge:
             "websocket_port": getattr(self.config, "websocket_port", None),
         }
 
+    def send_hud(self, payload: dict[str, Any]) -> None:
+        """Non-blocking HUD push onto the VR WebSocket loop."""
+        server = self.vr_server
+        loop = self._loop
+        if server is None or loop is None or not loop.is_running():
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(server.broadcast_json(payload), loop)
+        except RuntimeError:
+            logger.debug("VR HUD schedule failed", exc_info=True)
+
     async def stop_monitoring(self):
         self.is_running = False
+        self._loop = None
         if self.vr_server:
             await self.vr_server.stop()
         if self.https_server:

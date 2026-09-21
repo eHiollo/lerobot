@@ -14,6 +14,7 @@ from .a10_client import A10TCPClient
 logger = logging.getLogger(__name__)
 
 _XLEVR_ANCHOR_COMMAND_KEY = "_xlevr.anchor_command"
+_XLEVR_RESET_ARM_KEY = "_xlevr.reset_arm"
 
 
 class A10Follower(Robot):
@@ -142,6 +143,12 @@ class A10Follower(Robot):
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
         sent_action = dict(action)
+        reset_arm = bool(sent_action.pop(_XLEVR_RESET_ARM_KEY, False))
+        if reset_arm:
+            self.client.send_reset()
+            sent_action[_XLEVR_RESET_ARM_KEY] = True
+            return sent_action
+
         anchor_command = sent_action.pop(_XLEVR_ANCHOR_COMMAND_KEY, None)
         if self.config.send_ee_anchor_shadow and anchor_command is not None:
             self.client.send_ee_anchor(anchor_command)
