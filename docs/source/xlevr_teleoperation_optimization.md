@@ -998,3 +998,10 @@ A2.2 的实机影子日志仍需在 A2.4 前确认：`robot_xyz/user_xyz` 正确
 - 数据：action schema 仍为原 `ee.delta_*`；锚点控制数据必须使用新的 dataset root/repo_id，不得续录到旧控制模式数据集。
 - 验证：协议/governor 单测及 ASan/UBSan 通过，覆盖平移/旋转限速、冻结恢复、持续超限 fault 和重锚清积压；A10 TCP 语法检查、LeRobot `49 passed` 与 `git diff --check` 均通过。
 - 限制：本机缺少 `kaanhbotConfig.cmake`，完整 A10 工程尚未构建；A2.2 实机影子验证和 A2.4 低速台架均未执行，因此不得设为默认模式。
+
+### 15.12 VR 侧键连续性诊断（2026-09-21）
+
+- XLeRobot `kaanh_vr_op` 将侧键改为模拟量回差判定：压力达到 `0.20` 按下，降至 `0.10` 才松开，并随 `buttons.squeeze_value` 上报原始值；避免浏览器 `pressed/gripup` 在临界点抖动。
+- LeRobot 新增 `examples/xlevr_to_a10/test_vr_grip_stream.py`，只启动 VR 链路，不连接 A10；按住期间逐样本打印，断流、WebSocket 断开和疑似侧键抖动用 `!!!` 标记，完整轮询日志默认写入 `outputs/vr_grip_tests/*.jsonl`。
+- 启动：`python examples/xlevr_to_a10/test_vr_grip_stream.py`。结束时 `Ctrl+C`；VR 页面需重新载入以使用新的侧键脚本。
+- 验证：Python 语法/参数入口、断流与恢复状态模拟通过；浏览器侧阈值、回差、原始事件干扰、模拟量上报和数字按键回退共 38 项断言通过。A10 本次无修改，实机 VR 连续按压日志待采集。

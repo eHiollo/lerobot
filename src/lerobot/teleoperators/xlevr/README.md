@@ -124,7 +124,12 @@ python examples/xlevr_to_a10/teleoperate.py --robot-host 192.168.1.12 --robot-po
 python examples/xlevr_to_a10/teleoperate.py --vr-only \
   --diagnostics-jsonl /tmp/xlevr_vr_only.jsonl
 python examples/xlevr_to_a10/test_action_print.py
+python examples/xlevr_to_a10/test_vr_grip_stream.py
 ```
+
+`test_vr_grip_stream.py` 只启动 VR 链路，不连接机器人。按住右侧键时逐样本打印
+`[RX]`；断流、WebSocket 断开或侧键信号掉线用 `!!!` 标出。完整 JSONL 默认保存在
+`outputs/vr_grip_tests/`，用 `Ctrl+C` 结束并查看汇总。
 
 正式数据集录制用 `lerobot_record`（`--dataset.fps=30`，`--teleop.type=xlevr`）。
 
