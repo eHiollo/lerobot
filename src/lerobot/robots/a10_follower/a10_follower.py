@@ -145,6 +145,7 @@ class A10Follower(Robot):
         sent_action = dict(action)
         reset_arm = bool(sent_action.pop(_XLEVR_RESET_ARM_KEY, False))
         if reset_arm:
+            logger.info("左手摇杆向上：向 %s:%s 发送 reset", self.config.host, self.config.port)
             self.client.send_reset()
             sent_action[_XLEVR_RESET_ARM_KEY] = True
             return sent_action

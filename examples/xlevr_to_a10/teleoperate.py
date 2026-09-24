@@ -271,6 +271,8 @@ def main():
             if robot is not None and robot_link_ok:
                 try:
                     sent_action = robot.send_action(robot_action)
+                    if robot_action.get("_xlevr.reset_arm"):
+                        print("左手摇杆向上：已发送 reset，等待 vr_vel 回初始位", flush=True)
                 except ROBOT_LINK_ERRORS as exc:
                     logging.warning("机器人连接断开（发动作）: %s", exc)
                     _safe_robot_disconnect(robot)

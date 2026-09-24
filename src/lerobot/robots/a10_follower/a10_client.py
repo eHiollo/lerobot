@@ -315,7 +315,8 @@ class A10TCPClient:
         with self.tx_lock:
             if not self.is_connected:
                 raise ConnectionError("A10TCPBus is not connected")
-            self._send_line("RESET")
+            # Must be the whole line ``reset``. The 8080 parser drops anything else.
+            self._send_line("reset")
 
     # ---------- Feetech 风格 API：read / sync_read ----------
 

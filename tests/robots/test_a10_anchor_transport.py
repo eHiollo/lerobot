@@ -22,6 +22,36 @@ def anchor_command(**overrides):
     return command
 
 
+def test_client_sends_shell_reset_command():
+    client = A10TCPClient("a2.2-reset-test", 18082)
+    client.sock = object()
+    sent_lines = []
+    client._send_line = sent_lines.append
+
+    client.send_reset()
+
+    assert sent_lines == ["reset"]
+
+
+def test_follower_reset_sends_reset_and_skips_motion():
+    follower = object.__new__(A10Follower)
+    follower.config = SimpleNamespace(host="127.0.0.1", port=8080, use_ee_delta=True)
+    follower.client = FakeClient()
+    follower.cameras = {}
+
+    returned = follower.send_action(
+        {
+            "ee.enabled": True,
+            "ee.delta_x": 0.2,
+            "gripper.pos": 1.0,
+            "_xlevr.reset_arm": True,
+        }
+    )
+
+    assert follower.client.events == ["reset"]
+    assert returned["_xlevr.reset_arm"] is True
+
+
 def test_client_serializes_set_ee_anchor():
     client = A10TCPClient("a2.2-test", 18080)
     client.sock = object()
@@ -66,6 +96,9 @@ class FakeClient:
 
     def send_ee_delta(self, actions):
         self.events.append(("delta", actions))
+
+    def send_reset(self):
+        self.events.append("reset")
 
 
 def test_follower_sends_anchor_first_and_strips_sideband_from_recorded_action():

@@ -52,6 +52,17 @@ def translation(output) -> np.ndarray:
     return np.array([output["ee.delta_x"], output["ee.delta_y"], output["ee.delta_z"]])
 
 
+def test_reset_arm_survives_mapping_and_does_not_move():
+    step = mapper()
+    action = sample(1, 1.0, [0.0, 0.0, 0.0], enabled=False)
+    action["xlevr.reset_arm"] = True
+
+    output = step.action(action)
+
+    assert output["_xlevr.reset_arm"] is True
+    assert output["ee.enabled"] is False
+
+
 def test_first_enable_arms_without_motion_then_preserves_controller_body_mapping():
     step = mapper()
 
